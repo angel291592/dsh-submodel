@@ -1,0 +1,8 @@
+node_modules/
+reference/
+docs/plans/
+HANDOFF.md
+*.bak-*
+tests/_scratch/
+__pycache__/
+*.pyc
