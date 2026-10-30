@@ -37,7 +37,7 @@
   `policy.js` 零 import 检查覆盖 `from …` 与动态 `import()` 形态。
 - 兼容性声明按实测写明 DSH `0.2.1-rc.5`（`engines.dsh` 范围不变）。
 
-### 验证（2026-10-30 实测，V0–V6）
+### 验证（2026-10-30 实测，V0–V7）
 
 | 编号 | 结果 |
 |---|---|
@@ -48,5 +48,12 @@
 | V4 | `node tests/unit/public-profile-smoke.mjs` → **5 条断言，failed 0**（四类 fail-fast 日志文案逐字断言） |
 | V5 | `lib/` grep 本机路由名与禁止工具名 → **0 命中** |
 | V6 | `npm pack --dry-run` → **7 个文件**（lib×3、cordis.patch.yml、README、LICENSE、package.json），无 `reference/`、`tests/`、`.bak-*` |
+| V7 | 发布后验证：npm 0.1.0 公开可装；隔离 profile 从 registry 安装成功；GitHub 仓库公开（12 文件、7 topic）；dshbase issue #221 |
 
-V7（发布）未执行：等用户完成 npm 登录并确认包名、许可证、仓库名后再进行。
+### 发布（2026-10-31）
+
+- npm：[dsh-submodel@0.1.0](https://www.npmjs.com/package/dsh-submodel)（MIT）
+- GitHub：[angel291592/dsh-submodel](https://github.com/angel291592/dsh-submodel)（topic：dsh-plugin、dsh-plugins、deepseek-harness、deepseek-harness-plugin、subagent、delegation、model-routing）
+- dshbase 收录：[issue #221](https://github.com/ylwl1997/dshbase/issues/221)
+- 安装验证：隔离 profile（web 模板复制）从 npm 安装 → `dump-config` 含 `# == dsh-submodel` → 启动无插件报错
+
