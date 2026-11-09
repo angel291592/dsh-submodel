@@ -1,6 +1,6 @@
 {
   "name": "dsh-submodel",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "官方 subagent 的默认策略包：装上一次配好「什么时候自己干、什么时候派出去、派给谁」。",
   "type": "module",
   "main": "lib/index.js",
@@ -20,10 +20,10 @@
     }
   },
   "engines": {
-    "dsh": ">=0.2.1-rc.3 <0.3.0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/schemastery": "~3.18.4"
+    "@deepseek-ai/schemastery": ">=3.18.4 <4.0.0"
   },
   "files": [
     "lib",

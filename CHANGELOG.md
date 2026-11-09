@@ -2,6 +2,36 @@
 
 本包是 `dsh-model-routing`（本机自建插件）策略层的公版化产物；公开名定为 `dsh-submodel`。
 
+## 0.1.1（2026-11-10）
+
+**兼容 DSH 0.2.2-rc.1 的破坏性变更。必须升级：0.2.1 及更早版本与 0.1.0 互相不兼容。**
+
+### 修复
+
+- **`delegate_task` 迁移到 0.2.2 的批量执行 API**：`ctx.tools.execute(input)` 现在只接受
+  `{calls:[{id,name,arguments}], signal, agent?, toolSet?, log?, maxParallelToolCalls?}`，
+  返回 `{results:[{callId,result}], additionalContexts, concluded}`。0.1.0 传的是旧的单次
+  `execute({callId, rootCallId, name, arguments, agent, parent, signal})`，在 0.2.2 上会让
+  `delegate_task` **100% 失败**（模型只能看到 `Error: Tool batch execution failed`，根因被批量层吞掉）。
+- `arguments` 改传 **JSON 文本**（0.2.2 的批量实现会 `JSON.parse`）；结果按 `callId` 从
+  `results` 里取；`additionalContexts` / `concludesTurn` 从**子调用的 result**（不是 batch 级）读取。
+- 批量调度器抛错时把 `cause` 链写进错误消息（避免只剩通用文案，便于诊断）。
+- 嵌套调用不再伪造 `parent` / `rootCallId`（0.2.2 批量 API 已无该通道）；`toolSet` 在存在时
+  透传给同一步的准入集合（agent 必须是本步 resolve 时的同一对象，否则 `toolSet.view()` 返回空）。
+
+### 兼容性
+
+- `engines.dsh`: `>=0.2.2-rc.1 <0.3.0`（0.2.1 没有批量 API，无法兼容）。
+- `peerDependencies`: `@deepseek-ai/schemastery` `>=3.18.4 <4.0.0`（0.2.2 内置 3.19.0，旧范围 `~3.18.4` 会排除它）。
+
+### 验证
+
+- `node tests/unit/flash-routing-fixture.mjs ./lib` → **73 条断言，failed 0**
+  （新增：批量形状、arguments 为 JSON 文本、按 callId 取结果、toolSet 透传、cause 链诊断）。
+- `python -m unittest discover -s tests/unit` → **7 个用例 OK**。
+- 未做真实 DSH 0.2.2 宿主内的 `delegate_task` 端到端（需要重启后的桌面会话）；fixture 里的
+  `ctx.tools.execute` 是行为等价的假实现。
+
 ## 0.1.0（2026-10-30）
 
 首个公开版本：官方 subagent 的默认策略包——装上一次配好「什么时候自己干、什么时候派出去、派给谁」。

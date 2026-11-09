@@ -3,7 +3,8 @@
 > **官方 subagent 的默认策略包**：装上一次配好「什么时候自己干、什么时候派出去、派给谁」。
 
 它**不新建 provider 体系**——只读你 profile 里已有的渠道与模型配置，把委派策略写进系统提示词，
-并给官方 `subagent` 补一个统一的委派入口 `delegate_task`。本机实测于 DeepSeek Harness `0.2.1-rc.5`。
+并给官方 `subagent` 补一个统一的委派入口 `delegate_task`。0.1.1 起按 DeepSeek Harness
+`0.2.2-rc.1` 的公开 API 实现（要求 DSH ≥ 0.2.2-rc.1；0.2.1 及更早不兼容）。
 
 ## 安装
 
@@ -50,6 +51,8 @@ dsh plugin --profile <你的 profile> add dsh-submodel
   一律不可用，防止递归派活。
 - **`delegate_task`**：参数与原生 `subagent` 相同；`provider` 与 `model` 必须成对传；经
   `ctx.tools.execute` 发起真正的原生调用，宿主的 allowlist / 预检 / 权限照旧生效。
+  0.1.1 起按 DSH 0.2.2 的**批量执行 API**（`{calls:[{id,name,arguments}], signal, agent}`）转发，
+  结果按 `callId` 从 `{results}` 里取；0.2.1 及更早没有这个 API，不兼容本版。
 
 ## 与官方插件的边界
 
@@ -63,8 +66,8 @@ dsh plugin --profile <你的 profile> add dsh-submodel
 
 | DSH 版本 | 状态 |
 |---|---|
-| `0.2.1-rc.5` | ✅ 实测通过（安装、`--dump-config`、启动均实测） |
-| 其他 rc / 正式版 | 未逐一实测（`engines.dsh` 声明 `>=0.2.1-rc.3 <0.3.0`，不作宽承诺） |
+| `0.2.2-rc.1` | ✅ 按该版本源码/类型实现（批量 `ctx.tools.execute`、`agent.model` 固定路由语义）；本机 fixture 73 条断言 + Python 驱动 7 用例通过 |
+| `0.2.1-rc.5` 及更早 | ❌ 不兼容（旧版 `ctx.tools.execute` 是单次签名、没有批量 API）；`engines.dsh` 已声明 `>=0.2.2-rc.1 <0.3.0` |
 
 ## 故障排查（fail-fast：只记日志，绝不抛）
 

@@ -426,20 +426,38 @@ await check('routingTextFor: 子代文案不含主脑升级策略，且写明禁
   assert(!child.includes('p-opus'), 'child 段不得包含主脑升级策略（不得出现 p-opus 路由）');
 });
 
-// ── 5. 嵌套调用 token 链（new token 链字段） ─────────────────────────────────
-await check('buildNestedCall: callId 派生、rootCallId 继承、parent 用外层 token', () => {
-  const outerExec = { callId: 'C1', rootCallId: 'R0', token: 'tok-outer', signal: 'sig', agent: 'ag' };
-  const nested = delegation.buildNestedCall(outerExec, { prompt: 'x' });
-  assertEqual(nested.callId, 'C1:delegate');
-  assertEqual(nested.rootCallId, 'R0', 'rootCallId 必须继承外层');
-  assertEqual(nested.name, 'subagent', '必须调用原生 subagent');
-  assertEqual(nested.parent, 'tok-outer', 'parent 必须是外层 token');
+// ── 5. 嵌套调用：0.2.2 的批量执行形状 ───────────────────────────────────────
+await check('buildNestedCall: 批量形状 + arguments 是 JSON 文本 + agent/signal 透传', () => {
+  const outerExec = { callId: 'C1', signal: 'sig', agent: 'ag' };
+  const nested = delegation.buildNestedCall(outerExec, { prompt: 'x', provider: 'p-opus' });
+  assertEqual(nested.calls.length, 1, '必须是"只含一个 call 的批量"');
+  assertEqual(nested.calls[0].id, 'C1:delegate');
+  assertEqual(nested.calls[0].name, 'subagent', '必须调用原生 subagent');
+  assertEqual(typeof nested.calls[0].arguments, 'string', 'arguments 必须是 JSON 文本');
+  assertEqual(JSON.parse(nested.calls[0].arguments), { prompt: 'x', provider: 'p-opus' });
   assertEqual(nested.signal, 'sig', 'signal 必须同一条（取消要能传播）');
   assertEqual(nested.agent, 'ag');
+  assert(!('parent' in nested) && !('rootCallId' in nested), '0.2.2 批量 API 没有 parent/rootCallId 通道');
 });
-await check('buildNestedCall: 无 rootCallId 时回退自己的 callId', () => {
-  const nested = delegation.buildNestedCall({ callId: 'C9', token: 't', signal: 's', agent: 'a' }, {});
-  assertEqual(nested.rootCallId, 'C9');
+await check('buildNestedCall: toolSet 仅在存在时透传', () => {
+  const withToolSet = delegation.buildNestedCall({ callId: 'C1', signal: 's', agent: 'a', toolSet: 'ts' }, {});
+  assertEqual(withToolSet.toolSet, 'ts');
+  const without = delegation.buildNestedCall({ callId: 'C1', signal: 's', agent: 'a' }, {});
+  assert(!('toolSet' in without), '没有 toolSet 时不得凭空造一个');
+});
+await check('resultOfNestedCall: 按 callId 取 result', () => {
+  const result = { isError: false, value: { subagentId: 'child-1' } };
+  const batch = { results: [{ callId: 'C1:delegate', result }], additionalContexts: [], concluded: false };
+  assertEqual(delegation.resultOfNestedCall(batch, 'C1:delegate'), result);
+  assertEqual(delegation.resultOfNestedCall({ results: [] }, 'C1:delegate'), undefined);
+  assertEqual(delegation.resultOfNestedCall(undefined, 'C1:delegate'), undefined);
+});
+await check('describeBatchFailure: 带出 cause 链（不再只剩通用文案）', () => {
+  const text = delegation.describeBatchFailure(new Error('Tool batch execution failed', {
+    cause: new TypeError('signal is undefined'),
+  }));
+  assert(text.includes('Tool batch execution failed'), '必须含外层文案');
+  assert(text.includes('signal is undefined'), '必须含根因');
 });
 
 // ── 6. inner error 不得被当成成功 ────────────────────────────────────────────
@@ -457,11 +475,15 @@ await check('describeInnerFailure: 空错误也要有兜底文本', () => {
   const text = delegation.describeInnerFailure({});
   assert(text.length > 0);
 });
-await check('createDelegateTool: inner.isError 时抛出（不当成功 value）', async () => {
-  // 构造一个只会返回 isError 结果的假 tools runtime。
+await check('createDelegateTool: 子调用 isError 时抛出（不当成功 value）', async () => {
+  // 0.2.2 的批量返回值：{results:[{callId, result}]}；失败信息在 result 里。
   const ctx = {
     tools: {
-      execute: async () => ({ isError: true, error: { message: 'child route denied' }, content: [] }),
+      execute: async () => ({
+        results: [{ callId: 'C1:delegate', result: { isError: true, error: { message: 'child route denied' }, content: [] } }],
+        additionalContexts: [],
+        concluded: false,
+      }),
     },
   };
   const nativeDefinition = {
@@ -476,8 +498,6 @@ await check('createDelegateTool: inner.isError 时抛出（不当成功 value）
   });
   const exec = {
     callId: 'C1',
-    rootCallId: 'R0',
-    token: 't',
     signal: undefined,
     agent: {
       id: 'a',
@@ -494,25 +514,35 @@ await check('createDelegateTool: inner.isError 时抛出（不当成功 value）
     threw = true;
     assert(/child route denied/.test(error.message), '错误必须带上子调用的可读诊断');
   }
-  assert(threw, 'inner.isError 必须抛出，不能作为成功 value 返回');
+  assert(threw, '子调用 isError 必须抛出，不能作为成功 value 返回');
 });
-await check('createDelegateTool: 成功时只返回 inner.value 并转移延迟上下文', async () => {
+await check('createDelegateTool: 成功时只返回 result.value 并转移延迟上下文', async () => {
   const deferred = [];
   const ctx = {
     tools: {
       execute: async (input) => {
-        // 断言嵌套调用确实带了完整 token 链。
-        assertEqual(input.name, 'subagent');
-        assertEqual(input.parent, 't');
-        assertEqual(input.rootCallId, 'R0');
-        assertEqual(input.callId, 'C1:delegate');
-        assert(input.arguments.provider === 'opencode-go', '非 Flash 应注入 Go pair');
-        assert(input.arguments.reasoning_effort === 'low');
+        // 断言嵌套调用符合 0.2.2 批量契约。
+        assertEqual(Array.isArray(input.calls), true, '入参必须是批量形状');
+        assertEqual(input.calls.length, 1);
+        assertEqual(input.calls[0].name, 'subagent');
+        assertEqual(input.calls[0].id, 'C1:delegate');
+        assertEqual(typeof input.calls[0].arguments, 'string', 'arguments 必须是 JSON 文本');
+        const parsed = JSON.parse(input.calls[0].arguments);
+        assert(parsed.provider === 'opencode-go', '非 Flash 应注入 Go pair');
+        assert(parsed.reasoning_effort === 'low');
+        assert(!('parent' in input) && !('rootCallId' in input), '不得再传 parent/rootCallId');
         return {
-          isError: false,
-          value: { kind: 'foreground', runId: 'run-1', output: [] },
+          results: [{
+            callId: 'C1:delegate',
+            result: {
+              isError: false,
+              value: { kind: 'foreground', runId: 'run-1', output: [] },
+              additionalContexts: ['ctx-1'],
+              concludesTurn: true,
+            },
+          }],
           additionalContexts: ['ctx-1'],
-          concludesTurn: true,
+          concluded: true,
         };
       },
     },
@@ -525,8 +555,6 @@ await check('createDelegateTool: 成功时只返回 inner.value 并转移延迟�
   let concluded = false;
   const exec = {
     callId: 'C1',
-    rootCallId: 'R0',
-    token: 't',
     signal: undefined,
     agent: {
       id: 'a',
@@ -537,7 +565,7 @@ await check('createDelegateTool: 成功时只返回 inner.value 并转移延迟�
     concludeTurn: () => { concluded = true; },
   };
   const value = await tool.execute({ prompt: 'x' }, exec);
-  assertEqual(value, { kind: 'foreground', runId: 'run-1', output: [] }, '成功只返回 inner.value');
+  assertEqual(value, { kind: 'foreground', runId: 'run-1', output: [] }, '成功只返回 result.value');
   assertEqual(deferred, ['ctx-1'], 'additionalContexts 必须转移到 deferContext');
   assert(concluded === true, 'concludesTurn 为 true 才调用 concludeTurn');
 });
