@@ -56,10 +56,12 @@ function assertThrows(fn, message) {
 
 const policyUrl = pathToFileURL(resolvePath(libDir, 'policy.js')).href;
 const delegationUrl = pathToFileURL(resolvePath(libDir, 'delegation.js')).href;
+const setupUrl = pathToFileURL(resolvePath(libDir, 'setup.js')).href;
 const entryUrl = pathToFileURL(resolvePath(libDir, 'index.js')).href;
 
 const policy = await import(policyUrl);
 const delegation = await import(delegationUrl);
+const setup = await import(setupUrl);
 const entry = await import(entryUrl);
 
 /**
@@ -92,12 +94,42 @@ function nativeSubagentDefinition() {
 }
 
 /**
+ * 构造 fake agent 的 `session` 替身。**两份 header 数据别合并**（生产实现故意分开读）：
+ *
+ * - `header` 是 **durable session header**，也是 `roleOf(agent)` 的唯一角色判据：
+ *   宿主 `dsh-session` 只允许 `origin` 为 `'subagent'` 或省略，`delegationDepth` 为非负安全整数；
+ *   顶层会话用 `{}` / `{ delegationDepth: 0 }`，子代用 `{ origin: 'subagent', delegationDepth: 1 }`。
+ * - `requestHeader()` 是 0.2.2 的 `EpochHeader`（`{config, tools}`，**没有** origin/depth），
+ *   只供执行期读路由，不能拿来判角色。
+ *
+ * @param header - durable header（roleOf 判据）。
+ * @param requestHeader - 执行期 header 读取器。
+ * @returns `{ header, requestHeader }`。
+ */
+function makeSession(header, requestHeader = () => ({})) {
+  return { header, requestHeader };
+}
+
+/** 顶层 fake agent 的 session（宿主里根会话没有 origin，depth 为 0）。 */
+function rootSession(requestHeader) {
+  return makeSession({ delegationDepth: 0 }, requestHeader);
+}
+
+/** 子代 fake agent 的 session（宿主唯一的 origin 取值就是 'subagent'）。 */
+function childSession(requestHeader, depth = 1) {
+  return makeSession({ origin: 'subagent', delegationDepth: depth }, requestHeader);
+}
+
+/**
  * fixture 用的「agent 自己的 ctx」替身。
  *
  * 生产实现经 **agent 自己的 ctx** 注册（宿主官方指引：`dsh-tools:2634` 的重复注册报错原文
  * "register through that agent's `agent.ctx` instead"），不再自建 scope。所以这里给出
  * `{get, tools, on}` 三件套，并把每个注册的 disposer 包一层记进 `disposedRegistrations`——
  * 这样"卸载时确实回收了该 agent 上的注册"仍被真实断言，而不是被替身抹平。
+ *
+ * 注意：本 helper 只造 ctx；**agent 对象本身的 durable `session.header`** 由各 case 用
+ * `rootSession(...)` / `childSession(...)` 提供（roleOf 的新判据）。
  *
  * @param shared - `{get, tools, on, disposedRegistrations}` 收集器。
  * @returns 可直接挂到 candidate agent 上的 ctx 替身。
@@ -283,27 +315,112 @@ await check('isFlashModel: 空值/非字符串安全', () => {
   assert(policy.isFlashModel('') === false);
   assert(policy.isFlashModel(123) === false);
 });
-await check('modeForModel: Flash→economize，其余→boss', () => {
-  assert(policy.modeForModel('deepseek-flash') === 'economize');
-  assert(policy.modeForModel('claude-opus-5-5') === 'boss');
-  assert(policy.modeForModel(undefined) === 'boss');
+// ── 1b. 模式判定：路由匹配取代 flash 后缀（后缀只是 economyRoutes 为空时的 legacy 回退）──
+// 判定口径（plan §2.2）：① executor 的 provider+model 完全相等；② 命中 economyRoutes
+// （双方 provider 都非空时都比，任一方为空时只比 model）；③ economyRoutes 为空时回退 flash 后缀。
+const MODE_CFG = Object.freeze({
+  executor: Object.freeze({ provider: 'exec-provider', model: 'exec-model', reasoningEffort: 'max' }),
+  economyRoutes: Object.freeze([]),
 });
 
-// ── 2. 角色判定：child 的 origin/depth 防伪装 ─────────────────────────────────
-await check('roleOf: origin=subagent 判 child', () => {
-  assert(policy.roleOf({ origin: 'subagent', delegationDepth: 1 }, {}) === 'child');
+await check('modeForRoute: 与 executor 的 provider+model 完全相等 → economize', () => {
+  assertEqual(policy.modeForRoute({ provider: 'exec-provider', model: 'exec-model' }, MODE_CFG), 'economize');
+  assertEqual(policy.modeForRoute({ provider: 'exec-provider', model: 'exec-model' }, MODE_CFG), policy.MODE_ECONOMIZE);
 });
-await check('roleOf: 正 delegationDepth 判 child', () => {
-  assert(policy.roleOf({ delegationDepth: 2 }, {}) === 'child');
-  assert(policy.roleOf({}, { subagentDepth: 1 }) === 'child');
+
+await check('modeForRoute: 命中 economyRoutes（provider+model 都比）→ economize', () => {
+  const cfg = { executor: { provider: '', model: '' }, economyRoutes: [{ provider: 'eco-provider', model: 'eco-model' }] };
+  assertEqual(policy.modeForRoute({ provider: 'eco-provider', model: 'eco-model' }, cfg), 'economize');
+  assertEqual(policy.modeForRoute({ provider: 'other-provider', model: 'eco-model' }, cfg), 'boss', 'provider 不同且两边都非空 → 不命中');
+  assertEqual(policy.modeForRoute({ provider: 'eco-provider', model: 'other-model' }, cfg), 'boss', 'model 不同 → 不命中');
 });
-await check('roleOf: 顶层（无 origin/无正 depth）判 root', () => {
-  assert(policy.roleOf({}, {}) === 'root');
-  assert(policy.roleOf({ delegationDepth: 0 }, {}) === 'root');
-  assert(policy.roleOf(undefined, undefined) === 'root');
+
+await check('modeForRoute: 仅 model 命中（任一方 provider 为空）→ economize', () => {
+  const cfgNoProvider = { economyRoutes: [{ provider: '', model: 'eco-model' }] };
+  assertEqual(policy.modeForRoute({ provider: 'any-provider', model: 'eco-model' }, cfgNoProvider), 'economize', '条目 provider 为空 → 只比 model');
+  const cfgWithProvider = { economyRoutes: [{ provider: 'eco-provider', model: 'eco-model' }] };
+  assertEqual(policy.modeForRoute({ provider: '', model: 'eco-model' }, cfgWithProvider), 'economize', 'route provider 为空 → 只比 model');
 });
-await check('roleOf: parentSession 单独不判 child（普通 fork 不是子代）', () => {
-  assert(policy.roleOf({ parentSession: 'sess-abc' }, {}) === 'root', 'parentSession 不能单独当子代依据');
+
+await check('modeForRoute: 不命中 → boss（含 model 缺失/空）', () => {
+  assertEqual(policy.modeForRoute({ provider: 'other-provider', model: 'other-model' }, MODE_CFG), 'boss');
+  assertEqual(policy.modeForRoute({ provider: 'exec-provider', model: 'other-model' }, MODE_CFG), 'boss');
+  assertEqual(policy.modeForRoute({ provider: 'exec-provider', model: '' }, MODE_CFG), 'boss', '空 model 不猜模式');
+  assertEqual(policy.modeForRoute({ provider: 'exec-provider' }, MODE_CFG), 'boss');
+  assertEqual(policy.modeForRoute(undefined, MODE_CFG), 'boss');
+  assertEqual(policy.modeForRoute({ provider: 'exec-provider', model: 'exec-model' }, undefined), 'boss', '无 cfg 时不命中');
+});
+
+await check('modeForRoute: economyRoutes 为空时保留 flash 后缀兼容（legacy）', () => {
+  const cfg = { executor: { provider: '', model: '' }, economyRoutes: [] };
+  assertEqual(policy.modeForRoute({ provider: 'any-provider', model: 'deepseek-flash' }, cfg), 'economize');
+  assertEqual(policy.modeForRoute({ provider: 'any-provider', model: 'DEEPSEEK-FLASH' }, cfg), 'economize', '大小写不敏感');
+  assertEqual(policy.modeForRoute({ provider: 'any-provider', model: 'flash-lite' }, cfg), 'boss', '后缀才算');
+});
+
+await check('modeForRoute: economyRoutes 非空时 flash 后缀失效（旧规则不再参与）', () => {
+  const cfg = { executor: { provider: '', model: '' }, economyRoutes: [{ provider: '', model: 'explicit-model' }] };
+  assertEqual(policy.modeForRoute({ provider: 'any-provider', model: 'deepseek-flash' }, cfg), 'boss', '配了显式列表就不再用后缀猜');
+  assertEqual(policy.modeForRoute({ provider: 'any-provider', model: 'explicit-model' }, cfg), 'economize');
+});
+
+// ── 2. 角色判定：durable session header（origin/depth）+ options 冷恢复兜底 ────────
+// 旧实现读 EpochHeader（0.2.2 的 requestHeader 里没有 origin/depth），导致冷恢复子代
+// 永远判成 root；新实现读 agent.session.header，并允许 options.subagentDepth 兜底。
+await check('roleOf: header.origin=subagent 判 child', () => {
+  assertEqual(policy.roleOf({ session: makeSession({ origin: 'subagent' }) }), 'child');
+  assertEqual(policy.roleOf({ session: makeSession({ origin: 'subagent', delegationDepth: 0 }) }), 'child', 'origin 命中即可，不要求 depth');
+});
+await check('roleOf: header.delegationDepth > 0 判 child', () => {
+  for (const depth of [1, 2, 7]) {
+    assertEqual(policy.roleOf({ session: makeSession({ delegationDepth: depth }) }), 'child', `depth=${depth} 应判 child`);
+  }
+  assertEqual(policy.roleOf({ session: makeSession({ origin: 'anything-else', delegationDepth: 1 }) }), 'child', 'depth 判据独立于 origin 的非法值');
+});
+await check('roleOf: options.subagentDepth > 0 判 child（冷恢复没有 header.depth 时的兜底）', () => {
+  assertEqual(policy.roleOf({ options: { subagentDepth: 1 } }), 'child');
+  assertEqual(policy.roleOf({ options: { subagentDepth: 3 } }), 'child');
+});
+await check('roleOf: 顶层（无 origin、无正 depth）判 root', () => {
+  assertEqual(policy.roleOf({ session: makeSession({}), options: {} }), 'root');
+  assertEqual(policy.roleOf({ session: makeSession({ delegationDepth: 0 }), options: { subagentDepth: 0 } }), 'root');
+  assertEqual(policy.roleOf(undefined), 'root');
+  assertEqual(policy.roleOf({}), 'root');
+  // 普通 fork 带 parentSession，但没有 subagent origin/正 depth —— 不是子代。
+  assertEqual(policy.roleOf({ session: makeSession({ parentSession: 'sess-abc' }) }), 'root', 'parentSession 不能单独当子代依据');
+});
+await check('roleOf: 优先级 origin > header.depth > options.depth（任一命中即 child）', () => {
+  assertEqual(
+    policy.roleOf({ session: makeSession({ origin: 'subagent', delegationDepth: 0 }), options: { subagentDepth: 0 } }),
+    'child',
+    'origin=subagent 优先，其它判据为 0 也不影响',
+  );
+  assertEqual(
+    policy.roleOf({ session: makeSession({ delegationDepth: 1 }), options: { subagentDepth: 0 } }),
+    'child',
+    'header.depth 次之',
+  );
+  assertEqual(
+    policy.roleOf({ session: makeSession({ delegationDepth: 0 }), options: { subagentDepth: 2 } }),
+    'child',
+    'options 兜底第三',
+  );
+});
+await check('roleOf: session 缺失时只用 options（不抛）', () => {
+  assertEqual(policy.roleOf({ options: { subagentDepth: 1 } }), 'child');
+  assertEqual(policy.roleOf({ options: {} }), 'root');
+  assertEqual(policy.roleOf({ session: undefined, options: { subagentDepth: 0 } }), 'root');
+  assertEqual(policy.roleOf({ session: null, options: { subagentDepth: 2 } }), 'child');
+});
+await check('roleOf: 非法 depth 值不判 child', () => {
+  for (const bad of ['1', NaN, Infinity, -Infinity, -1, null, true, {}]) {
+    assertEqual(
+      policy.roleOf({ session: makeSession({ delegationDepth: bad }), options: {} }),
+      'root',
+      `header.delegationDepth=${String(bad)} 不该判 child`,
+    );
+    assertEqual(policy.roleOf({ options: { subagentDepth: bad } }), 'root', `options.subagentDepth=${String(bad)} 不该判 child`);
+  }
 });
 await check('resolveCallerRole: 无 agent 明确失败', () => {
   const r = policy.resolveCallerRole({});
@@ -314,11 +431,17 @@ await check('resolveCallerRole: 过期 agent（无 requestHeader）失败', () =
   const r = policy.resolveCallerRole({ agent: { id: 'a', session: {}, options: {} } });
   assert(r.ok === false, '无 session.requestHeader 视为过期身份');
 });
-await check('resolveCallerRole: live root 成功', () => {
-  const agent = { id: 'a', options: { model: 'gpt-6.1-sol' }, session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) } };
+await check('resolveCallerRole: live root 成功（角色来自 durable header）', () => {
+  const agent = {
+    id: 'a',
+    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
+  };
   const r = policy.resolveCallerRole({ agent });
   assert(r.ok === true);
   assert(r.role === 'root');
+  assert(r.agent === agent, 'resolveCallerRole 必须回传 agent');
+  assertEqual(r.header.id, 's1', 'header 取的是 session.requestHeader()（执行期 header）');
 });
 
 // ── 3. 显式 pair 的完整性与路由默认值 ────────────────────────────────────────
@@ -401,27 +524,120 @@ await check('resolveDelegationArgs: 输入不被修改（Frozen input 不变）'
   assert(r.args !== original, '必须返回派生对象，不是同一个引用');
 });
 
-// ── 4. assembly 模型解析：必须选"新选择"而不是过期的 options ─────────────────
-await check('modelFromAssembly: 正常取值', () => {
-  assertEqual(policy.modelFromAssembly({ variables: { model: 'deepseek-flash' } }), 'deepseek-flash');
+// ── 4. assembly 路由解析：变量优先、缺 model 报错、listener 回退 agent.options ────
+await check('routeFromAssembly: provider+model 变量都取到', () => {
+  assertEqual(policy.routeFromAssembly({ variables: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }), {
+    provider: 'p-gpt',
+    model: 'gpt-6.1-sol',
+  });
 });
-await check('modelFromAssembly: 缺失/空值明确报错，不猜模型', () => {
-  assertThrows(() => policy.modelFromAssembly({ variables: {} }), '缺 model 必须抛错');
-  assertThrows(() => policy.modelFromAssembly({ variables: { model: '' } }), '空 model 必须抛错');
-  assertThrows(() => policy.modelFromAssembly({}), '无 variables 必须抛错');
+await check('routeFromAssembly: 只有 model 时 provider 为空串', () => {
+  assertEqual(policy.routeFromAssembly({ variables: { model: 'deepseek-flash' } }), { provider: '', model: 'deepseek-flash' });
+  assertEqual(policy.routeFromAssembly({ variables: { provider: 42, model: 'm' } }), { provider: '', model: 'm' }, '非字符串 provider 按空串处理');
+});
+await check('routeFromAssembly: model 缺失/空值明确报错，不猜模型', () => {
+  assertThrows(() => policy.routeFromAssembly({ variables: {} }), '缺 model 必须抛错');
+  assertThrows(() => policy.routeFromAssembly({ variables: { model: '' } }), '空 model 必须抛错');
+  assertThrows(() => policy.routeFromAssembly({}), '无 variables 必须抛错');
+  assertThrows(() => policy.routeFromAssembly(undefined), 'undefined assembly 必须抛错');
+});
+await check('assembly listener: variables 缺 model 时回退 agent.options；缺两处不崩且警告', async () => {
+  const assemblyListeners = [];
+  const lookedUpServices = [];
+  const warns = [];
+  const disposedRegistrations = [];
+  const candidate = {
+    id: 'options-root',
+    ctx: {},
+    // durable header 判 root；requestHeader 的 config 故意与 options 不同，证明回退读的是 options。
+    session: rootSession(() => ({ id: 's-opt', config: { provider: 'header-provider', model: 'header-model' } })),
+    options: { provider: 'opt-provider', model: 'opt-model' },
+  };
+  const tools = {
+    get: (name) => (name === 'subagent' ? nativeSubagentDefinition() : name === 'list_subagent_models' ? {} : undefined),
+    register: () => () => {},
+    guard: () => () => {},
+  };
+  const fakeCtx = {
+    logger: { info() {}, warn: (m) => warns.push(m), error() {} },
+    tools,
+    systemPrompt: { section: () => () => {} },
+    on: () => () => {},
+    get: (name) => {
+      lookedUpServices.push(name);
+      if (name === 'agents') return { list: () => [candidate] };
+      if (name === 'agentPresets') return { composedPreset: () => 'standard' };
+      return undefined;
+    },
+  };
+  candidate.ctx = makeAgentCtx({
+    get: fakeCtx.get,
+    tools,
+    on: (event, listener) => {
+      if (event === 'system-prompt/assemble') assemblyListeners.push(listener);
+      return () => {};
+    },
+    disposedRegistrations,
+  });
+  entry.apply(fakeCtx, entry.Config({ enabled: true, executor: EXECUTOR }));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assertEqual(assemblyListeners.length, 1);
+  const listener = assemblyListeners[0];
+  const expectedFor = (route) =>
+    policy.routingTextFor('root', route, { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } });
+
+  // ① variables 里没有 model → 回退 agent.options 的 provider/model。
+  const fallbackAssembly = { variables: {}, sections: [{ name: policy.ROUTING_SECTION, text: '' }] };
+  const resolved = await listener(fallbackAssembly, { agent: candidate, scope: candidate }, async () => fallbackAssembly);
+  assertEqual(
+    resolved.sections[0].text,
+    expectedFor({ provider: 'opt-provider', model: 'opt-model' }),
+    'variables 缺 model 必须回退 agent.options 路由',
+  );
+  assertEqual(resolved.sections[0].interpolate, false);
+  assert(!lookedUpServices.includes('sessionController'), '0.2.2 没有 sessionController，不得再查询该死通道');
+
+  // ② variables 有 model 时优先于 options（描述 GUI 即将发起的这笔请求）。
+  const variablesAssembly = {
+    variables: { provider: 'var-provider', model: 'var-model' },
+    sections: [{ name: policy.ROUTING_SECTION, text: '' }],
+  };
+  const fromVariables = await listener(variablesAssembly, { agent: candidate, scope: candidate }, async () => variablesAssembly);
+  assertEqual(fromVariables.sections[0].text, expectedFor({ provider: 'var-provider', model: 'var-model' }), 'assembly 变量必须优先于 agent.options');
+
+  // ③ 两处都没有 model → routeFromAssembly 抛错，listener 只警告并保持原段（不得把 assembly 弄挂）。
+  const missingAssembly = { variables: {}, sections: [{ name: policy.ROUTING_SECTION, text: 'STALE' }] };
+  const originalOptions = candidate.options;
+  candidate.options = {};
+  let crashed = false;
+  let fromMissing;
+  try {
+    fromMissing = await listener(missingAssembly, { agent: candidate, scope: candidate }, async () => missingAssembly);
+  } catch {
+    crashed = true;
+  } finally {
+    candidate.options = originalOptions;
+  }
+  assert(crashed === false, '两处都缺 model 时不得把 assembly 弄挂');
+  assertEqual(fromMissing.sections[0].text, 'STALE', '缺 model 时保持原段');
+  assertEqual(warns.filter((m) => m.includes('assembly section left unchanged')).length, 1, '缺 model 必须 warn 一次');
 });
 await check('routingTextFor: 两种顶层模式文本不同且都含关键内容', () => {
-  const renderContext = { executor: EXECUTOR, experts: [], texts: {} };
-  const eco = policy.routingTextFor('root', 'deepseek-flash', renderContext);
-  const boss = policy.routingTextFor('root', 'gpt-6.1-sol', renderContext);
+  const renderContext = { executor: EXECUTOR, experts: [], texts: {}, economyRoutes: [] };
+  const eco = policy.routingTextFor('root', { provider: 'dev-provider', model: 'deepseek-flash' }, renderContext);
+  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, renderContext);
   assert(eco !== boss, '两模式正文必须不同');
   assert(eco.includes('delegate_task') && boss.includes('delegate_task'));
   assert(!eco.includes(EXECUTOR.provider), 'Flash 段不该硬编码执行路由');
   assert(boss.includes(EXECUTOR.provider) && boss.includes(EXECUTOR.model), 'boss 段应通过占位符注入执行路由');
 });
 await check('routingTextFor: 子代文案不含主脑升级策略，且写明禁止再委派', () => {
-  const child = policy.routingTextFor('child', 'gpt-6.1-sol');
-  assert(child !== policy.routingTextFor('root', 'gpt-6.1-sol', { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } }), 'child 不能复用 boss 文本');
+  const child = policy.routingTextFor('child', undefined);
+  assert(
+    child !==
+      policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } }),
+    'child 不能复用 boss 文本',
+  );
   assert(child.includes('delegate_task'), '要写明哪些能力不可用');
   assert(!child.includes('p-opus'), 'child 段不得包含主脑升级策略（不得出现 p-opus 路由）');
 });
@@ -502,7 +718,7 @@ await check('createDelegateTool: 子调用 isError 时抛出（不当成功 valu
     agent: {
       id: 'a',
       options: { model: 'gpt-6.1-sol' },
-      session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+      session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     },
     deferContext() { throw new Error('must not defer on failure'); },
     concludeTurn() { throw new Error('must not conclude on failure'); },
@@ -559,7 +775,7 @@ await check('createDelegateTool: 成功时只返回 result.value 并转移延迟
     agent: {
       id: 'a',
       options: { model: 'gpt-6.1-sol' },
-      session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+      session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     },
     deferContext: (c) => deferred.push(c),
     concludeTurn: () => { concluded = true; },
@@ -581,7 +797,7 @@ await check('createDelegateTool: 子代调用被拒绝（只有顶层可用）',
     agent: {
       id: 'child',
       options: {},
-      session: { requestHeader: () => ({ origin: 'subagent', delegationDepth: 1, config: {} }) },
+      session: childSession(() => ({ config: {} })),
     },
     deferContext() {}, concludeTurn() {},
   };
@@ -626,7 +842,7 @@ await check('findNativeSubagent: 工具不可见 → undefined', () => {
 });
 
 // ── 7. 插件 Config 与导入无副作用 ───────────────────────────────────────────
-await check('index.js Config: 默认值（enabled=true、preset=standard、executor 空、无专家）', () => {
+await check('index.js Config: 默认值（enabled=true、preset=standard、executor 空、无专家、向导开）', () => {
   const parsed = entry.Config({});
   assert(parsed.enabled === true, '公开版默认开启自动策略（缺前置时用日志 fail-fast，不静默）');
   assert(parsed.preset === 'standard');
@@ -636,6 +852,14 @@ await check('index.js Config: 默认值（enabled=true、preset=standard、execu
   assertEqual(parsed.experts, [], '专家路由默认空，正文不渲染任何具体路由名');
   assertEqual(parsed.texts, { economize: '', boss: '', child: '' });
   assert(parsed.guardNativeSubagent === true);
+  assert(parsed.autoConfigure === true, '自动配置向导默认开启');
+  assertEqual(parsed.economyRoutes, [], '经济路由默认空 = 保留 flash 后缀兼容');
+  const configured = entry.Config({
+    autoConfigure: false,
+    economyRoutes: [{ provider: 'eco-provider', model: 'eco-model' }],
+  });
+  assert(configured.autoConfigure === false);
+  assertEqual(configured.economyRoutes, [{ provider: 'eco-provider', model: 'eco-model' }]);
 });
 await check('index.js 导入无副作用，且导出 apply/name/inject', () => {
   assert(typeof entry.apply === 'function');
@@ -697,7 +921,7 @@ await check('apply(enabled=true): 非 standard composition 不装（composition 
   const candidate = {
     id: 'other',
     ctx: {},
-    session: { requestHeader: () => ({ config: { model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })),
     options: {},
   };
   const fakeCtx = {
@@ -723,7 +947,7 @@ await check('apply(enabled=true): 合格 standard root 只装 delegate_task（�
   const candidate = {
     id: 'std-root',
     ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const tools = {
@@ -759,30 +983,21 @@ await check('apply(enabled=true): 合格 standard root 只装 delegate_task（�
     assertSupportedSchema(definition.output.schema, `${definition.name}.output.schema`);
   }
 });
-await check('assembly: sessionController.agents.selectionFor 优先于旧值且换模即时切换正文', async () => {
+await check('assembly: variables 变量优先于 agent.options / 过期 header，换模即时切换正文', async () => {
   const assemblyListeners = [];
   const lookedUpServices = [];
   const disposedRegistrations = [];
-  const selection = { current: { provider: 'p-gpt', model: 'gpt-6.1-sol' } };
-  let accepted = { id: 'selection-root', config: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } };
+  let accepted = { id: 'assembly-root', config: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } };
   const candidate = {
-    id: 'selection-root',
+    id: 'assembly-root',
     ctx: {},
-    session: { requestHeader: () => accepted },
-    options: { model: 'deepseek-v4.1-flash' },
+    session: rootSession(() => accepted),
+    options: { provider: 'stale-provider', model: 'stale-model' },
   };
   const tools = {
-    get: () => nativeSubagentDefinition(),
+    get: (name) => (name === 'subagent' ? nativeSubagentDefinition() : name === 'list_subagent_models' ? {} : undefined),
     register: () => () => {},
     guard: () => () => {},
-  };
-  const controller = {
-    agents: {
-      selectionFor: (target) => {
-        assert(target === candidate, 'selectionFor 必须使用正在 assembly 的 agent');
-        return selection;
-      },
-    },
   };
   const fakeCtx = {
     logger: { info() {}, warn() {}, error() {} },
@@ -793,7 +1008,7 @@ await check('assembly: sessionController.agents.selectionFor 优先于旧值且�
       lookedUpServices.push(name);
       if (name === 'agents') return { list: () => [candidate] };
       if (name === 'agentPresets') return { composedPreset: () => 'standard' };
-      if (name === 'sessionController') return controller;
+      if (name === 'sessionController') throw new Error('0.2.2 没有 sessionController：不得再查询该死通道');
       return undefined;
     },
   };
@@ -810,26 +1025,33 @@ await check('assembly: sessionController.agents.selectionFor 优先于旧值且�
   await new Promise((resolve) => setTimeout(resolve, 30));
   assertEqual(assemblyListeners.length, 1);
   const unchangedSection = Object.freeze({ name: 'unrelated-section', text: 'unchanged' });
-  const assembly = Object.freeze({
-    variables: Object.freeze({ model: 'deepseek-v4.1-flash' }),
-    sections: Object.freeze([Object.freeze({ name: 'tool:model-routing', text: '' }), unchangedSection]),
-  });
+  const makeAssembly = (variables) =>
+    Object.freeze({
+      variables: Object.freeze(variables),
+      sections: Object.freeze([Object.freeze({ name: 'tool:model-routing', text: '' }), unchangedSection]),
+    });
+  const expectedFor = (route) =>
+    policy.routingTextFor('root', route, { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } });
   const listener = assemblyListeners[0];
-  const boss = await listener(assembly, { agent: candidate, scope: candidate }, async () => assembly);
-  assertEqual(boss.sections[0].text, policy.routingTextFor('root', 'gpt-6.1-sol', { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } }), '真实服务形状下新 GPT 选择必须覆盖旧 Flash');
-  assert(boss.variables === assembly.variables && boss.sections[1] === unchangedSection, '不能修改变量或无关段');
+
+  // assembly 变量是"GUI 即将发起的这笔请求"，必须压过 options 里的创建期旧值。
+  const bossAssembly = makeAssembly({ provider: 'p-gpt', model: 'gpt-6.1-sol' });
+  const boss = await listener(bossAssembly, { agent: candidate, scope: candidate }, async () => bossAssembly);
+  assertEqual(boss.sections[0].text, expectedFor({ provider: 'p-gpt', model: 'gpt-6.1-sol' }), 'assembly 变量必须覆盖 agent.options 的旧路由');
+  assert(boss.variables === bossAssembly.variables && boss.sections[1] === unchangedSection, '不能修改变量或无关段');
   assertEqual(boss.sections[0].interpolate, false);
-  accepted = { id: candidate.id, config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } };
-  selection.current = { provider: 'deepseek-account', model: 'deepseek-flash' };
-  const staleBossAssembly = { ...assembly, variables: { model: 'gpt-6.1-sol' } };
-  const economize = await listener(staleBossAssembly, { agent: candidate, scope: candidate }, async () => staleBossAssembly);
-  assertEqual(economize.sections[0].text, policy.routingTextFor('root', 'deepseek-flash', { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } }), '同 agent 新 Flash 选择必须覆盖旧 GPT');
+
+  // 同一条 listener：换到经济路由后立刻切 economize 正文（不需要重新安装）。
+  accepted = { id: candidate.id, config: { provider: 'deepseek-account', model: 'deepseek-flash' } };
+  const economizeAssembly = makeAssembly({ provider: 'deepseek-account', model: 'deepseek-flash' });
+  const economize = await listener(economizeAssembly, { agent: candidate, scope: candidate }, async () => economizeAssembly);
+  assertEqual(
+    economize.sections[0].text,
+    expectedFor({ provider: 'deepseek-account', model: 'deepseek-flash' }),
+    '换到经济路由必须立即切 economize 正文',
+  );
   assert(economize.sections[1] === unchangedSection, '换模不能修改无关段');
-  selection.current = undefined;
-  const fallback = await listener(staleBossAssembly, { agent: candidate, scope: candidate }, async () => staleBossAssembly);
-  assertEqual(fallback.sections[0].text, policy.routingTextFor('root', 'gpt-6.1-sol', { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } }), '无 session-local selection 时保留 assembly 变量回退');
-  assert(lookedUpServices.includes('sessionController'), '必须查询真实 sessionController 服务');
-  assert(!lookedUpServices.includes('apiSessionController'), '不得查询不存在的 apiSessionController 服务');
+  assert(!lookedUpServices.includes('sessionController'), '不得再依赖 0.2.2 不存在的 sessionController 死通道');
 });
 await check('schema 子集守护：能抓住旧的非法写法（否则该守护形同虚设）', () => {
   // 旧实现正是这三处非法写法，2026-10-05 在真实宿主里让整个安装零注册。
@@ -871,7 +1093,7 @@ await check('能力暂时缺失不得锁死：后续 tools/change 必须能补�
   const candidate = {
     id: 'std-root',
     ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const tools = {
@@ -915,7 +1137,7 @@ await check('能力出现后 agent/pre-step 也必须补装（不依赖 tools/ch
   const candidate = {
     id: 'std-root',
     ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const tools = {
@@ -952,16 +1174,18 @@ await check('能力出现后 agent/pre-step 也必须补装（不依赖 tools/ch
 });
 await check('子代 guard：对禁止工具返回字符串理由（不是抛异常）', async () => {
   const guards = [];
+  const registered = [];
   const disposedRegistrations = [];
   const candidate = {
-    id: 'std-root',
+    id: 'std-child',
     ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    // 角色只由 durable header 判定（options 里没有 subagentDepth，冷恢复场景）。
+    session: childSession(() => ({ id: 's2', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const tools = {
     get: () => nativeSubagentDefinition(),
-    register: () => () => {},
+    register: (d) => { registered.push(d.name); return () => {}; },
     guard: (g) => { guards.push(g); return () => {}; },
   };
   const fakeCtx = {
@@ -976,37 +1200,39 @@ await check('子代 guard：对禁止工具返回字符串理由（不是抛异�
     },
   };
   candidate.ctx = makeAgentCtx({ get: fakeCtx.get, tools, on: () => () => {}, disposedRegistrations });
-  entry.apply(fakeCtx, entry.Config({ enabled: true }));
+  entry.apply(fakeCtx, entry.Config({ enabled: true, executor: EXECUTOR }));
   await new Promise((r) => setTimeout(r, 50));
-  // guard 闭包按 agent 的实时 header 判定，所以这里让同一个 agent 对象"现在"看起来是子代。
-  const childAgent = candidate;
-  const originalHeader = childAgent.session.requestHeader;
-  childAgent.session.requestHeader = () => ({ origin: 'subagent', delegationDepth: 1, config: { model: 'deepseek-v4.1-flash' } });
-  childAgent.options = { subagentDepth: 1 };
+  assertEqual(registered, [], '子代不注册 delegate_task / configure_submodel');
+  assert(guards.length >= 1, '子代也必须装角色 guard');
   const reasons = [];
-  try {
-    for (const g of guards) {
+  for (const g of guards) {
+    for (const toolName of ['delegate_task', 'subagent', 'subagent_fork', 'workflow', 'spawn_teammate']) {
       let r;
       try {
-        r = g({ name: 'workflow', agent: childAgent, arguments: {} });
+        r = g({ name: toolName, agent: candidate, arguments: {} });
       } catch (error) {
         throw new Error(`guard 必须用返回值拒绝，抛异常会把 guard 故障和策略拒绝混为一谈: ${error.message}`);
       }
-      if (typeof r === 'string') reasons.push(r);
+      if (typeof r === 'string') reasons.push(`${toolName}: ${r}`);
     }
-  } finally {
-    childAgent.session.requestHeader = originalHeader;
-    childAgent.options = { model: 'gpt-6.1-sol' };
   }
-  assert(reasons.length >= 1, '子代调用 workflow 必须被 guard 用字符串理由拒绝');
-  assert(/unavailable to a delegated subagent/.test(reasons[0]));
+  assertEqual(reasons.length, 5, `子代的 5 个禁止工具都必须被拒绝，实际: ${reasons.join(' | ') || '空'}`);
+  assert(reasons.every((r) => /unavailable to a delegated subagent/.test(r)));
+  // 角色在安装时由 durable header 固定（agent 生命周期内不变）：事后篡改 header 不改变已装 guard。
+  candidate.session.header = { delegationDepth: 0 };
+  const afterTamper = [];
+  for (const g of guards) {
+    const r = g({ name: 'workflow', agent: candidate, arguments: {} });
+    if (typeof r === 'string') afterTamper.push(r);
+  }
+  assert(afterTamper.length >= 1, '角色来自安装时的 durable header，生命周期内不变');
 });
 await check('子代 guard：允许非禁止工具（不误伤 read）', async () => {
   const guards = [];
   const disposedRegistrations = [];
   const candidate = {
-    id: 'std-root', ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    id: 'std-child', ctx: {},
+    session: childSession(() => ({ id: 's2', config: {} })),
     options: { model: 'gpt-6.1-sol' },
   };
   const tools = {
@@ -1026,20 +1252,17 @@ await check('子代 guard：允许非禁止工具（不误伤 read）', async ()
     },
   };
   candidate.ctx = makeAgentCtx({ get: fakeCtx.get, tools, on: () => () => {}, disposedRegistrations });
-  entry.apply(fakeCtx, entry.Config({ enabled: true }));
+  entry.apply(fakeCtx, entry.Config({ enabled: true, executor: EXECUTOR }));
   await new Promise((r) => setTimeout(r, 50));
-  const childAgent = candidate;
-  const originalHeader = childAgent.session.requestHeader;
-  childAgent.session.requestHeader = () => ({ origin: 'subagent', delegationDepth: 1, config: {} });
-  childAgent.options = { subagentDepth: 1 };
-  try {
+  for (const toolName of ['read', 'bash', 'list_agents']) {
     for (const g of guards) {
-      const r = g({ name: 'read', agent: childAgent, arguments: {} });
-      assert(r === undefined, `guard 不得拦截 read，实际返回: ${String(r)}`);
+      const r = g({ name: toolName, agent: candidate, arguments: {} });
+      assert(r === undefined, `guard 不得拦截 ${toolName}，实际返回: ${String(r)}`);
     }
-  } finally {
-    childAgent.session.requestHeader = originalHeader;
-    childAgent.options = { model: 'gpt-6.1-sol' };
+  }
+  // 只作用于本 agent：别的 agent 的 exec 不该被这个 guard 拦截。
+  for (const g of guards) {
+    assert(g({ name: 'workflow', agent: { id: 'other-agent' }, arguments: {} }) === undefined, 'guard 不得跨 agent 拦截');
   }
 });
 await check('非 Flash root 的 native subagent guard：half pair 被拒、完整 pair 放行', async () => {
@@ -1047,7 +1270,7 @@ await check('非 Flash root 的 native subagent guard：half pair 被拒、完�
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const tools = {
@@ -1096,7 +1319,7 @@ await check('重复 reconcile 不产生重复注册（幂等）', async () => {
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const listeners = [];
@@ -1131,7 +1354,7 @@ await check('agent/disposed 后工具被卸载，且再次安装不报错', asyn
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const listeners = [];
@@ -1166,7 +1389,7 @@ await check('安装失败时清理部分注册并上报（不吞异常）', asyn
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   let registeredCount = 0;
@@ -1201,7 +1424,7 @@ await check('plugin dispose 卸载所有 owned 安装', async () => {
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: { requestHeader: () => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }) },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
     options: { model: 'gpt-6.1-sol' },
   };
   const listeners = [];
@@ -1232,9 +1455,12 @@ await check('plugin dispose 卸载所有 owned 安装', async () => {
 
 // ── 10. 正文模板化 / 渲染 / fail-fast 文案 ────────────────────────────────────
 await check('策略正文：升级判据是"问题复杂度"，审查不是理由，且只引用官方工具名', () => {
-  const renderContext = { executor: EXECUTOR, experts: [], texts: {} };
-  for (const model of ['deepseek-flash', 'gpt-6.1-sol']) {
-    const text = policy.routingTextFor('root', model, renderContext);
+  const renderContext = { executor: EXECUTOR, experts: [], texts: {}, economyRoutes: [] };
+  for (const route of [
+    { provider: 'dev-provider', model: 'deepseek-flash' },
+    { provider: 'dev-provider', model: 'gpt-6.1-sol' },
+  ]) {
+    const text = policy.routingTextFor('root', route, renderContext);
     assert(text.includes('复杂代码/逻辑判断'), '升级判据必须是"问题本身的复杂度"');
     assert(text.includes('需要独立审查/复核'), '必须写明"审查/复核"本身不是升级理由');
     for (const banned of ['list_subagents', 'wait_subagents', 'send_subagent_message', 'interrupt_subagent']) {
@@ -1242,11 +1468,11 @@ await check('策略正文：升级判据是"问题复杂度"，审查不是理�
     }
     assert(!text.includes('m-opus'), '正文不得出现本机兜底路由名');
   }
-  const boss = policy.routingTextFor('root', 'gpt-6.1-sol', renderContext);
+  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, renderContext);
   for (const official of ['list_agents', 'send_message', 'interrupt_agent']) {
     assert(boss.includes(official), `boss 段必须引用官方控制工具 ${official}`);
   }
-  assert(!policy.routingTextFor('child', 'gpt-6.1-sol').includes('p-opus'), 'child 段仍不得包含主脑升级策略');
+  assert(!policy.routingTextFor('child', undefined).includes('p-opus'), 'child 段仍不得包含主脑升级策略');
 });
 await check('renderExpertRoutes: 逐行渲染，空数组给"未配置"提示', () => {
   const empty = policy.renderExpertRoutes([]);
@@ -1276,16 +1502,16 @@ await check('renderTemplate: 只替换两个占位符，executor 空为（未配
   assert(policy.renderTemplate('x{{executorRoute}}y', {}).includes('（未配置）'), 'executor 未配置时给可读占位');
 });
 await check('routingTextFor: texts 非空时整段替换且不再插值', () => {
-  const custom = policy.routingTextFor('root', 'gpt-6.1-sol', {
+  const custom = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, {
     executor: { provider: 'route-a', model: 'model-a' },
     experts: [],
     texts: { boss: 'CUSTOM {{executorRoute}}' },
   });
   assertEqual(custom, 'CUSTOM {{executorRoute}}', '用户覆盖正文后不得再插值');
-  assertEqual(policy.routingTextFor('child', 'x', { texts: { child: 'CHILD CUSTOM' } }), 'CHILD CUSTOM');
+  assertEqual(policy.routingTextFor('child', undefined, { texts: { child: 'CHILD CUSTOM' } }), 'CHILD CUSTOM');
   assertEqual(
-    policy.routingTextFor('root', 'gpt-6.1-sol', { texts: { economize: 'ECO CUSTOM' } }),
-    policy.routingTextFor('root', 'gpt-6.1-sol'),
+    policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, { texts: { economize: 'ECO CUSTOM' } }),
+    policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }),
     '非当前模式的覆盖不生效',
   );
 });
@@ -1294,13 +1520,63 @@ await check('内置模板不含任何具体渠道/模型名（路由只经占位
     executor: { provider: 'route-a', model: 'model-a' },
     experts: [{ label: '专家A', provider: 'route-b', model: 'model-b' }],
     texts: {},
+    economyRoutes: [],
   };
-  for (const model of ['deepseek-flash', 'gpt-6.1-sol']) {
-    const text = policy.routingTextFor('root', model, renderContext);
+  for (const route of [
+    { provider: 'dev-provider', model: 'deepseek-flash' },
+    { provider: 'dev-provider', model: 'gpt-6.1-sol' },
+  ]) {
+    const text = policy.routingTextFor('root', route, renderContext);
     for (const leaked of ['p-opus', 'p-gpt', 'm-opus', 'opencode-go', 'deepseek-account', 'claude-opus-5-5', 'deepseek-v4.1-flash']) {
       assert(!text.includes(leaked), `模板不得含本机路由名 ${leaked}`);
     }
   }
+});
+// ── 10b. 委派语义：启动即返回子会话 id、完成由运行时通知（plan §2.5）─────────────
+await check('正文（BOSS）：含「立即返回子会话 id」与「通知」', () => {
+  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, {
+    executor: EXECUTOR,
+    experts: [],
+    texts: {},
+    economyRoutes: [],
+  });
+  assert(boss.includes('立即返回子会话 id'), 'boss 正文必须写明"启动后立即返回子会话 id"');
+  assert(boss.includes('通知'), 'boss 正文必须写明"完成时由运行时通知"');
+  assert(boss.includes('不要反复轮询'), '必须给出不轮询的纪律');
+});
+await check('正文（ECONOMIZE）：含「立即返回子会话 id」与「通知」', () => {
+  const economize = policy.routingTextFor('root', { provider: 'dev-provider', model: 'deepseek-flash' }, {
+    executor: EXECUTOR,
+    experts: [],
+    texts: {},
+    economyRoutes: [],
+  });
+  assert(economize.includes('立即返回子会话 id'), 'Flash 正文必须写明"启动后立即返回子会话 id"');
+  assert(economize.includes('通知'), 'Flash 正文必须写明"完成时由运行时通知"');
+});
+await check('正文（两模式）：不含过期的「直接返回结果 / return its result」', () => {
+  const renderContext = { executor: EXECUTOR, experts: [], texts: {}, economyRoutes: [] };
+  for (const route of [
+    { provider: 'dev-provider', model: 'gpt-6.1-sol' },
+    { provider: 'dev-provider', model: 'deepseek-flash' },
+  ]) {
+    const text = policy.routingTextFor('root', route, renderContext);
+    assert(!text.includes('直接返回结果'), '旧语义「delegate_task 前台调用会直接返回结果」必须删除');
+    assert(!text.includes('return its result'), '不得出现英文旧措辞');
+  }
+});
+await check('delegate_task 工具描述：含 "immediately returns its id"、不含 "return its result"', () => {
+  const tool = delegation.createDelegateTool({
+    ctx: { tools: { execute: async () => ({ results: [] }) } },
+    nativeDefinition: nativeSubagentDefinition(),
+    executor: EXECUTOR,
+    logger: { info() {} },
+  });
+  assert(tool.description.includes('immediately returns its id'), `工具描述必须写明立即返回 id；实际: ${tool.description}`);
+  assert(tool.description.includes('the runtime notifies you when it finishes'), '工具描述必须写明完成时由运行时通知');
+  assert(!tool.description.includes('return its result'), '不得出现 "return its result" 旧语义');
+  assert(!tool.description.includes('(Flash)') && !tool.description.includes('(non-Flash)'), '必须删除 "(Flash)/(non-Flash)" 旧措辞');
+  assert(tool.description.includes('current route'), '无显式路由时继承当前路由的说法必须保留');
 });
 await check('apply fail-fast: executor 未配置时记 error 日志且不抛', () => {
   const errors = [];
@@ -1317,7 +1593,7 @@ await check('apply fail-fast: executor 未配置时记 error 日志且不抛', (
 await check('apply fail-fast: 无 agentPresets 服务时每 agent 一次 warn（不静默）', async () => {
   const warns = [];
   const listeners = [];
-  const candidate = { id: 'c1', ctx: {}, session: { requestHeader: () => ({ config: { model: 'gpt-6.1-sol' } }) }, options: {} };
+  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })), options: {} };
   const fakeCtx = {
     logger: { info() {}, warn: (m) => warns.push(m), error() {} },
     tools: { get: () => undefined, register: () => () => {}, guard: () => () => {} },
@@ -1336,7 +1612,7 @@ await check('apply fail-fast: 无 agentPresets 服务时每 agent 一次 warn（
 await check('apply fail-fast: 原生 subagent 无 provider/model 时 warn 一次且不装 delegate_task', async () => {
   const warns = [];
   const registered = [];
-  const candidate = { id: 'c1', ctx: {}, session: { requestHeader: () => ({ config: { model: 'gpt-6.1-sol' } }) }, options: {} };
+  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })), options: {} };
   const tools = {
     get: (name) => (name === 'subagent'
       ? { parameters: { type: 'object', properties: { prompt: { type: 'string' } } }, output: {} }
@@ -1364,7 +1640,7 @@ await check('apply fail-fast: 原生 subagent 无 provider/model 时 warn 一次
 await check('apply fail-fast: list_subagent_models 不可见时 info 一次且策略段不渲染', async () => {
   const infos = [];
   const assemblyListeners = [];
-  const candidate = { id: 'c1', ctx: {}, session: { requestHeader: () => ({ config: { model: 'gpt-6.1-sol' } }) }, options: { model: 'gpt-6.1-sol' } };
+  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })), options: { model: 'gpt-6.1-sol' } };
   const tools = {
     get: (name) => (name === 'subagent' ? nativeSubagentDefinition() : undefined),
     register: () => () => {},
@@ -1402,6 +1678,511 @@ await check('apply fail-fast: list_subagent_models 不可见时 info 一次且�
   assertEqual(first.sections[0].text, '', '工具不可见时策略段不得渲染');
   assertEqual(second.sections[0].text, '');
   assertEqual(infos.filter((m) => m.includes('未启用官方 subagent 模型选择')).length, 1, '每 agent 一次 info');
+});
+
+// ── 11. 自动配置向导：纯函数层 + 假 ctx 接线（plan §2.4/§4.5）────────────────────
+// 覆盖三块：候选排序/分组、三问结构、回答解析、两处配置合并；再用假 ctx 跑完整
+// entry.apply → configure_submodel.execute 接线（写两处/降级/权限/注册门控）。
+const SETUP_PACK = [
+  { provider: 'prov-plain', model: 'plain-model', name: 'Plain Model', description: 'cheap flash mini fast' },
+  { provider: 'prov-strong', model: 'strong-pro', name: 'Strong Pro' },
+  { provider: 'prov-eco', model: 'eco-lite', name: 'Economy Lite' },
+  { provider: 'prov-eco', model: 'eco-flash', name: 'Economy Flash' },
+  { provider: 'prov-strong', model: 'strong-opus', name: 'Strong Opus' },
+];
+const setupCandidates = () => policy.deriveSetupCandidates(SETUP_PACK);
+const groupOf = (candidates, model) => candidates.find((c) => c.model === model)?.group;
+
+// 纯函数 ①：候选排序 / 宿主 allowedModels +3 / 分组
+await check('deriveSetupCandidates: 排序确定（分高优先→命中数→字典序），宿主 allowedModels 命中 +3', () => {
+  const first = setupCandidates();
+  assertEqual(
+    first.map((c) => c.model),
+    ['eco-flash', 'eco-lite', 'strong-opus', 'strong-pro', 'plain-model'],
+    '确定性排序：分数→经济命中→强推理命中→provider/model 字典序',
+  );
+  assertEqual(setupCandidates().map((c) => c.model), first.map((c) => c.model), '同一输入必须给出同一顺序');
+  assertEqual(first.every((c) => c.authorized === false), true, '无宿主授权时 authorized 全 false');
+  const withHost = policy.deriveSetupCandidates(SETUP_PACK, {
+    enabled: false,
+    allowedModels: [{ provider: 'prov-plain', model: 'plain-model' }],
+  });
+  assertEqual(withHost[0].model, 'plain-model', '宿主已授权路由 +3，必须排到最前');
+  assertEqual(withHost[0].score, 3, '0 个关键词 + 授权 3 分');
+  assertEqual(withHost[0].authorized, true);
+  assertEqual(withHost.filter((c) => c.authorized).length, 1);
+  assertEqual(first.find((c) => c.model === 'plain-model').score, 0, '未授权时同一候选 0 分');
+});
+await check('deriveSetupCandidates: 分组 economy/strong/unknown，description 不参与关键词', () => {
+  const candidates = setupCandidates();
+  assertEqual(groupOf(candidates, 'eco-flash'), 'economy');
+  assertEqual(groupOf(candidates, 'eco-lite'), 'economy');
+  assertEqual(groupOf(candidates, 'strong-opus'), 'strong');
+  assertEqual(groupOf(candidates, 'strong-pro'), 'strong');
+  assertEqual(groupOf(candidates, 'plain-model'), 'unknown', 'description 里的 cheap/flash/mini/fast 不得参与打分');
+  const plain = candidates.find((c) => c.model === 'plain-model');
+  assertEqual([plain.economyHits, plain.strongHits], [0, 0], '关键词只看 model 与 name');
+  assertEqual(policy.deriveSetupCandidates(undefined, undefined), [], '非数组输入安全返回空');
+});
+await check('deriveSetupCandidates: 同时命中 cheap 与 strong 关键词 → 平票归 economy，且进 executor 候选', () => {
+  // 回归点：STRONG_KEYWORDS 含 `deep`，`deepseek-flash` 会同时命中 `deep`(strong) 与 `flash`(economy)。
+  // 旧规则按"平票 = unknown"处理，导致最常见的执行路由既不进 executor 候选、也不进 experts 候选。
+  const pack = [
+    { provider: 'deepseek-official', model: 'deepseek-flash', name: 'DeepSeek Flash' },
+    { provider: 'prov-strong', model: 'strong-opus', name: 'Strong Opus' },
+  ];
+  const candidates = policy.deriveSetupCandidates(pack);
+  const flash = candidates.find((c) => c.provider === 'deepseek-official' && c.model === 'deepseek-flash');
+  assert(flash !== undefined, '候选必须包含 deepseek-flash');
+  assertEqual(flash.economyHits, 1, 'flash 命中 economy 关键词');
+  assertEqual(flash.strongHits, 1, 'deepseek 里的 deep 命中 strong 关键词（本回归点的前提）');
+  assertEqual(flash.group, 'economy', 'cheap/strong 平票必须归 economy，不得判成 unknown');
+  const executorQuestion = policy.buildSetupQuestions(candidates).find((q) => q.id === policy.SETUP_QUESTION_EXECUTOR);
+  assert(
+    executorQuestion.options.some((o) => o.label === 'deepseek-official/deepseek-flash'),
+    `executor 候选必须包含 deepseek-flash；实际: ${executorQuestion.options.map((o) => o.label).join(',')}`,
+  );
+});
+
+// 纯函数 ②：三问结构 = executor 单选 / experts 多选 / authorize 单选
+await check('buildSetupQuestions: 三问结构（id/multiSelect/选项来自候选）', () => {
+  const questions = policy.buildSetupQuestions(setupCandidates());
+  assertEqual(
+    questions.map((q) => q.id),
+    [policy.SETUP_QUESTION_EXECUTOR, policy.SETUP_QUESTION_EXPERTS, policy.SETUP_QUESTION_AUTHORIZE],
+    '三问顺序与 id 必须稳定',
+  );
+  assertEqual(questions.map((q) => q.multiSelect), [false, true, false], 'executor/authorize 单选、experts 多选');
+  assert(questions.every((q) => typeof q.question === 'string' && q.question !== ''), '每问必须有中文题干');
+  const [executorQuestion, expertsQuestion, authorizeQuestion] = questions;
+  assertEqual(
+    executorQuestion.options.map((o) => o.label),
+    ['prov-eco/eco-flash', 'prov-eco/eco-lite', 'prov-strong/strong-opus', 'prov-strong/strong-pro'],
+    '经济组优先；不足 8 个时用强推理组补',
+  );
+  assertEqual(
+    expertsQuestion.options.map((o) => o.label),
+    ['prov-strong/strong-opus', 'prov-strong/strong-pro'],
+    '专家选项只来自强推理组',
+  );
+  assertEqual(authorizeQuestion.options.map((o) => o.label), ['yes', 'no']);
+  assert(
+    executorQuestion.options.every((o) => typeof o.label === 'string' && o.label.includes('/')),
+    '选项 label 就是回填键 provider/model',
+  );
+  assertEqual(executorQuestion.options[0].description, 'Economy Flash', '选项描述来自候选 name');
+  assert(!executorQuestion.options.some((o) => o.label.includes('plain-model')), 'unknown 组不进执行路由选项');
+  assertEqual(policy.buildSetupQuestions(undefined).length, 3, '非数组输入也要给出三问骨架');
+});
+
+// 纯函数 ③：回答解析
+await check('parseSetupAnswers: selected 正常解析（executor/experts/authorize=yes）', () => {
+  const parsed = policy.parseSetupAnswers(
+    [
+      { id: 'executor', selected: ['prov-eco/eco-lite'] },
+      { id: 'experts', selected: ['prov-strong/strong-opus', 'prov-strong/strong-pro'] },
+      { id: 'authorize', selected: ['yes'] },
+    ],
+    setupCandidates(),
+  );
+  assertEqual(parsed.ok, true);
+  assertEqual(parsed.executor, { provider: 'prov-eco', model: 'eco-lite' });
+  assertEqual(parsed.experts, [
+    { provider: 'prov-strong', model: 'strong-opus' },
+    { provider: 'prov-strong', model: 'strong-pro' },
+  ]);
+  assertEqual(parsed.authorize, true);
+  assertEqual(parsed.customRoutes, []);
+});
+await check('parseSetupAnswers: custom provider/model 解析（覆盖 selected + 追加专家）', () => {
+  const parsed = policy.parseSetupAnswers(
+    [
+      { id: 'executor', selected: ['prov-eco/eco-lite'], custom: 'custom-prov/custom-exec' },
+      { id: 'experts', selected: ['prov-strong/strong-opus'], custom: ' custom-prov/custom-expert ' },
+      { id: 'authorize', selected: ['no'] },
+    ],
+    setupCandidates(),
+  );
+  assertEqual(parsed.ok, true);
+  assertEqual(parsed.executor, { provider: 'custom-prov', model: 'custom-exec' }, 'custom 覆盖 selected');
+  assertEqual(
+    parsed.experts,
+    [
+      { provider: 'prov-strong', model: 'strong-opus' },
+      { provider: 'custom-prov', model: 'custom-expert' },
+    ],
+    'custom 专家追加在最后',
+  );
+  assertEqual(parsed.authorize, false);
+  assertEqual(parsed.customRoutes, [
+    { provider: 'custom-prov', model: 'custom-exec' },
+    { provider: 'custom-prov', model: 'custom-expert' },
+  ], 'custom 路由要交给 setup.js 做 resolveModelInfo 存在性校验');
+});
+await check('parseSetupAnswers: custom 非法格式被拒（只接受 provider/model）', () => {
+  for (const bad of ['no-slash', '/model', 'provider/']) {
+    const parsed = policy.parseSetupAnswers([{ id: 'executor', custom: bad }], setupCandidates());
+    assertEqual(parsed.ok, false, `custom=${bad} 必须被拒`);
+    assert(/provider\/model 形式/.test(parsed.reason), `custom=${bad} 的理由应指向 provider/model 形式；实际: ${parsed.reason}`);
+  }
+  const expertsBad = policy.parseSetupAnswers(
+    [
+      { id: 'executor', selected: ['prov-eco/eco-flash'] },
+      { id: 'experts', custom: 'badformat' },
+    ],
+    setupCandidates(),
+  );
+  assertEqual(expertsBad.ok, false);
+  assert(/专家路由必须是 provider\/model 形式/.test(expertsBad.reason), expertsBad.reason);
+});
+await check('parseSetupAnswers: selected 不在候选列表 → 拒绝', () => {
+  const parsed = policy.parseSetupAnswers([{ id: 'executor', selected: ['ghost-provider/ghost-model'] }], setupCandidates());
+  assertEqual(parsed.ok, false);
+  assert(/不在候选列表/.test(parsed.reason), parsed.reason);
+  const expertsBad = policy.parseSetupAnswers(
+    [
+      { id: 'executor', selected: ['prov-eco/eco-flash'] },
+      { id: 'experts', selected: ['prov-strong/strong-opus', 'ghost/ghost'] },
+    ],
+    setupCandidates(),
+  );
+  assertEqual(expertsBad.ok, false);
+  assert(/不在候选列表/.test(expertsBad.reason), expertsBad.reason);
+});
+await check('parseSetupAnswers: executor 跳过报错；authorize=no/缺省=false/非法标签被拒', () => {
+  const candidates = setupCandidates();
+  const skipped = policy.parseSetupAnswers(
+    [
+      { id: 'executor', selected: [] },
+      { id: 'experts', selected: [] },
+      { id: 'authorize', selected: [] },
+    ],
+    candidates,
+  );
+  assertEqual(skipped.ok, false);
+  assert(/未选择执行路由/.test(skipped.reason), skipped.reason);
+  const noAnswers = policy.parseSetupAnswers(undefined, candidates);
+  assertEqual(noAnswers.ok, false, '完全没有回答也必须拒绝（executor 必填）');
+  const noAuthorize = policy.parseSetupAnswers([{ id: 'executor', selected: ['prov-eco/eco-flash'] }], candidates);
+  assertEqual(noAuthorize.ok, true);
+  assertEqual(noAuthorize.authorize, false, 'authorize 跳过 = 不写宿主授权');
+  assertEqual(noAuthorize.experts, [], 'experts 跳过 = 不配专家');
+  const authorizeNo = policy.parseSetupAnswers(
+    [
+      { id: 'executor', selected: ['prov-eco/eco-flash'] },
+      { id: 'authorize', selected: ['no'] },
+    ],
+    candidates,
+  );
+  assertEqual(authorizeNo.ok, true);
+  assertEqual(authorizeNo.authorize, false, 'authorize=no');
+  const badAuthorize = policy.parseSetupAnswers(
+    [
+      { id: 'executor', selected: ['prov-eco/eco-flash'] },
+      { id: 'authorize', selected: ['maybe'] },
+    ],
+    candidates,
+  );
+  assertEqual(badAuthorize.ok, false);
+  assert(/无法识别的授权选项/.test(badAuthorize.reason), badAuthorize.reason);
+});
+
+// 纯函数 ④：两处配置合并
+await check('composeNextPluginConfig: 保留其他字段，写 executor/experts/economyRoutes', () => {
+  const current = {
+    enabled: true,
+    preset: 'standard',
+    toolName: 'list_subagent_models',
+    executor: { provider: 'old-provider', model: 'old-model', reasoningEffort: 'low' },
+    experts: [{ label: 'old', provider: 'old-provider', model: 'old-model' }],
+    texts: { boss: 'CUSTOM' },
+    economyRoutes: [{ provider: 'old-provider', model: 'old-model' }],
+  };
+  const next = policy.composeNextPluginConfig(current, {
+    executor: { provider: 'prov-eco', model: 'eco-flash' },
+    experts: [
+      { provider: 'prov-strong', model: 'strong-opus' },
+      { provider: 'prov-strong', model: 'strong-pro' },
+    ],
+  });
+  assertEqual(next.enabled, true);
+  assertEqual(next.preset, 'standard');
+  assertEqual(next.toolName, 'list_subagent_models');
+  assertEqual(next.texts, { boss: 'CUSTOM' }, '其他字段必须保留');
+  assertEqual(next.executor, { provider: 'prov-eco', model: 'eco-flash', reasoningEffort: 'max' });
+  assertEqual(next.experts, [
+    { label: 'prov-strong/strong-opus', provider: 'prov-strong', model: 'strong-opus' },
+    { label: 'prov-strong/strong-pro', provider: 'prov-strong', model: 'strong-pro' },
+  ]);
+  assertEqual(next.economyRoutes, [{ provider: 'prov-eco', model: 'eco-flash' }]);
+  assertEqual(current.executor.provider, 'old-provider', '不得原地改 current');
+  assertEqual(
+    policy.composeNextPluginConfig(undefined, { executor: { provider: 'p', model: 'm' }, experts: [] }).economyRoutes,
+    [{ provider: 'p', model: 'm' }],
+    'current 缺失也要能拼出下一份',
+  );
+});
+await check('composeNextHostConfig: 去重合并、保留原顺序、enabled:true', () => {
+  const current = {
+    enabled: false,
+    allowedModels: [{ provider: 'a1', model: 'm1' }, null, { provider: 'a2', model: 'm2' }, { provider: 'a1', model: 'm1' }],
+    extra: 'keep',
+  };
+  const routes = [
+    { provider: 'a2', model: 'm2' },
+    { provider: 'a3', model: 'm3' },
+    { provider: 'a1', model: 'm1' },
+    { provider: 'a3', model: 'm3' },
+    { provider: '', model: 'invalid' },
+  ];
+  const next = policy.composeNextHostConfig(current, routes);
+  assertEqual(next.enabled, true);
+  assertEqual(next.extra, 'keep', '其他字段必须保留');
+  assertEqual(
+    next.allowedModels,
+    [
+      { provider: 'a1', model: 'm1' },
+      { provider: 'a2', model: 'm2' },
+      { provider: 'a3', model: 'm3' },
+    ],
+    '原有顺序在前、新增去重在后、非法条目跳过',
+  );
+  assertEqual(current.allowedModels.length, 4, '不得原地改 current');
+});
+
+/**
+ * 造一个「插件顶层 ctx + root agent + 向导服务替身」的世界：先 `apply` 注册向导，
+ * 再用注册出来的工具定义验证 `execute` 的两处写入与全部降级路径。
+ *
+ * 只替身宿主服务（llm/userQuestions/configEditor/subagentModelSelection），不替身被测逻辑；
+ * `configEditor.edit` 记录 `(entryId, next)` 并推进 entry 的 config，供断言写入顺序与合并值。
+ */
+function makeWizardWorld(options = {}) {
+  const pluginEntry = { options: { id: 'submodel', config: { enabled: true, preset: 'standard' } } };
+  const hostEntry = options.noHostEntry
+    ? undefined
+    : {
+        options: {
+          id: 'subagent-model-selection-settings',
+          config: { enabled: false, allowedModels: [{ provider: 'existing', model: 'existing-model' }] },
+        },
+      };
+  const registered = [];
+  const registeredDefinitions = [];
+  const edits = [];
+  const askRequests = [];
+  const logs = { info: [], warn: [], error: [] };
+
+  const editor = options.noEditor
+    ? undefined
+    : {
+        entries: () => (hostEntry === undefined ? [pluginEntry] : [pluginEntry, hostEntry]),
+        edit: async (entry, change) => {
+          const next = change(structuredClone(entry.options.config ?? {}), {});
+          edits.push({ entryId: entry.options.id, next });
+          entry.options.config = next;
+        },
+      };
+  const llm = {
+    listProviders: () => [...new Set(SETUP_PACK.map((row) => row.provider))].map((id) => ({ id })),
+    listModels: async (provider) =>
+      SETUP_PACK.filter((row) => row.provider === provider).map((row) => ({ id: row.model, name: row.name, description: row.description })),
+    resolveModelInfo: async (provider, model) => {
+      const hit = SETUP_PACK.find((row) => row.provider === provider && row.model === model);
+      if (hit === undefined) throw new Error(`unknown model ${provider}/${model}`);
+      return hit;
+    },
+  };
+  const defaultAnswers = (questions) => {
+    const executorOptions = questions.find((q) => q.id === policy.SETUP_QUESTION_EXECUTOR)?.options ?? [];
+    const expertOptions = questions.find((q) => q.id === policy.SETUP_QUESTION_EXPERTS)?.options ?? [];
+    return [
+      { id: policy.SETUP_QUESTION_EXECUTOR, selected: executorOptions.length === 0 ? [] : [executorOptions[0].label] },
+      { id: policy.SETUP_QUESTION_EXPERTS, selected: expertOptions.map((option) => option.label) },
+      { id: policy.SETUP_QUESTION_AUTHORIZE, selected: [options.authorize ?? 'yes'] },
+    ];
+  };
+  const userQuestions = {
+    ask: async (request) => {
+      askRequests.push(request);
+      if (options.askError !== undefined) throw options.askError;
+      const answers = typeof options.answers === 'function' ? options.answers(request.questions) : defaultAnswers(request.questions);
+      return { answers };
+    },
+  };
+  const services = {
+    llm,
+    userQuestions,
+    configEditor: editor,
+    subagentModelSelection: { current: () => ({ enabled: false, allowedModels: [] }) },
+  };
+  const candidate = {
+    id: 'wizard-root',
+    ctx: {},
+    session: rootSession(() => ({ id: 's-wizard', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
+    options: { model: 'gpt-6.1-sol' },
+  };
+  const tools = {
+    get: (name) => (name === 'subagent' ? nativeSubagentDefinition() : name === 'list_subagent_models' ? {} : undefined),
+    register: (definition) => {
+      registered.push(definition.name);
+      registeredDefinitions.push(definition);
+      return () => {};
+    },
+    guard: () => () => {},
+  };
+  const fakeCtx = {
+    logger: {
+      info: (message) => logs.info.push(message),
+      warn: (message) => logs.warn.push(message),
+      error: (message) => logs.error.push(message),
+    },
+    tools,
+    systemPrompt: { section: () => () => {} },
+    on: () => () => {},
+    get: (name) => {
+      if (name === 'agents') return { list: () => [candidate] };
+      if (name === 'agentPresets') return { composedPreset: () => 'standard' };
+      return services[name];
+    },
+    fiber: { entry: pluginEntry },
+  };
+  candidate.ctx = makeAgentCtx({ get: fakeCtx.get, tools, on: () => () => {}, disposedRegistrations: [] });
+  return {
+    fakeCtx,
+    candidate,
+    registered,
+    registeredDefinitions,
+    edits,
+    askRequests,
+    logs,
+    logger: fakeCtx.logger,
+    tool: (name) => registeredDefinitions.find((definition) => definition.name === name),
+    async apply(configOverrides = {}) {
+      entry.apply(fakeCtx, entry.Config({ enabled: true, ...configOverrides }));
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    },
+  };
+}
+
+// 接线 ①：注册门控（executor 未配置才注册向导；已配置不注册）
+await check('apply: executor 未配置时 root 注册 configure_submodel；已配置时不注册', async () => {
+  const empty = makeWizardWorld();
+  await empty.apply();
+  const setupTool = empty.tool(policy.SETUP_TOOL_NAME);
+  assert(setupTool !== undefined, `executor 未配置时 root 必须注册 configure_submodel；实际: ${empty.registered.join(',')}`);
+  assertEqual(setupTool.name, 'configure_submodel');
+  assertEqual(setupTool.parameters, {});
+  assertEqual(setupTool.output.schema, { type: 'string' });
+  assertEqual(typeof setupTool.output.render, 'function');
+  assertEqual(setupTool.output.render({}, 'hello'), [{ type: 'text', text: 'hello' }]);
+  assertSupportedSchema(setupTool.output.schema, 'configure_submodel.output.schema');
+  assert(empty.registered.includes('delegate_task'), 'delegate_task 仍要注册');
+
+  const configured = makeWizardWorld();
+  await configured.apply({ executor: { provider: 'cfg-provider', model: 'cfg-model', reasoningEffort: 'max' } });
+  assertEqual(configured.tool(policy.SETUP_TOOL_NAME), undefined, 'executor 已配置时不得注册向导');
+  assert(configured.registered.includes('delegate_task'), 'delegate_task 不受影响');
+});
+
+// 接线 ②：正常调用 → 先写宿主授权、后写插件配置，返回文案写明两处结果
+await check('configure_submodel: 正常调用写两处（宿主授权先、插件配置后）', async () => {
+  const world = makeWizardWorld();
+  await world.apply();
+  const result = await world.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: world.candidate, signal: 'SIG-1' });
+  assert(result.includes('已写入执行路由 prov-eco/eco-flash'), `结果必须报出写入的执行路由；实际: ${result}`);
+  assert(result.includes('2 条专家路由'), `实际: ${result}`);
+  assert(result.includes('宿主授权已写入'), `实际: ${result}`);
+  assert(result.includes('新会话生效'), '必须提示新会话生效');
+  assertEqual(world.askRequests.length, 1);
+  const request = world.askRequests[0];
+  assertEqual(request.agent, world.candidate, 'ask 必须用 exec.agent');
+  assertEqual(request.signal, 'SIG-1', 'signal 必须透传');
+  assertEqual(
+    request.questions.map((q) => q.id),
+    [policy.SETUP_QUESTION_EXECUTOR, policy.SETUP_QUESTION_EXPERTS, policy.SETUP_QUESTION_AUTHORIZE],
+    '一张卡三问',
+  );
+  assertEqual(world.edits.length, 2, '必须写两处');
+  assertEqual(world.edits[0].entryId, policy.HOST_SELECTION_ENTRY_ID, '先写宿主授权（volatile，不重载）');
+  assertEqual(world.edits[1].entryId, 'submodel', '最后写插件配置（会重载本插件）');
+  assertEqual(world.edits[0].next.enabled, true);
+  assertEqual(
+    world.edits[0].next.allowedModels,
+    [
+      { provider: 'existing', model: 'existing-model' },
+      { provider: 'prov-eco', model: 'eco-flash' },
+      { provider: 'prov-strong', model: 'strong-opus' },
+      { provider: 'prov-strong', model: 'strong-pro' },
+    ],
+    '宿主授权 = 原有路由 + executor + experts，去重保序',
+  );
+  assertEqual(world.edits[1].next.executor, { provider: 'prov-eco', model: 'eco-flash', reasoningEffort: 'max' });
+  assertEqual(world.edits[1].next.experts, [
+    { label: 'prov-strong/strong-opus', provider: 'prov-strong', model: 'strong-opus' },
+    { label: 'prov-strong/strong-pro', provider: 'prov-strong', model: 'strong-pro' },
+  ]);
+  assertEqual(world.edits[1].next.economyRoutes, [{ provider: 'prov-eco', model: 'eco-flash' }]);
+  assertEqual(world.edits[1].next.preset, 'standard', '插件配置其他字段必须保留');
+});
+
+// 接线 ③：authorize=no → 只写插件配置
+await check('configure_submodel: authorize=no 只写插件配置', async () => {
+  const world = makeWizardWorld({ authorize: 'no' });
+  await world.apply();
+  const result = await world.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: world.candidate });
+  assert(result.includes('宿主授权未写入（按你的选择）'), `实际: ${result}`);
+  assertEqual(world.edits.length, 1, 'authorize=no 不得写宿主授权');
+  assertEqual(world.edits[0].entryId, 'submodel');
+  assertEqual(world.edits[0].next.executor.provider, 'prov-eco');
+});
+
+// 接线 ④：ask 抛错 → 手动 YAML 兜底、不写任何配置
+await check('configure_submodel: ask 抛错返回手动文本且不写配置', async () => {
+  const world = makeWizardWorld({ askError: Object.assign(new Error('no gui client'), { code: 'NO_PROVIDER' }) });
+  await world.apply();
+  const result = await world.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: world.candidate });
+  assert(result.includes('未能完成提问'), `实际: ${result}`);
+  assert(result.includes('NO_PROVIDER'), '错误码必须带出来');
+  assert(result.includes('请在 profile 补丁层'), '必须给手动两步 YAML 兜底');
+  assert(result.includes('subagent-model-selection-settings'), '手动 YAML 必须含宿主授权行');
+  assertEqual(world.edits.length, 0, 'ask 失败不得写任何配置');
+});
+
+// 接线 ⑤：非 root 调用抛错（只有顶层能用向导）
+await check('configure_submodel: 非 root 调用抛错', async () => {
+  const world = makeWizardWorld();
+  const tool = setup.createSetupTool({ ctx: world.fakeCtx, config: {}, logger: world.logger });
+  const child = {
+    id: 'wizard-child',
+    session: childSession(() => ({ config: {} })),
+    options: {},
+  };
+  let message = '';
+  try {
+    await tool.execute({}, { agent: child });
+  } catch (error) {
+    message = error.message;
+  }
+  assert(/only available to a top-level agent/.test(message), `非 root 必须抛错；实际: ${message}`);
+});
+
+// 接线 ⑥：configEditor 缺失 / 宿主授权行缺失 → 手动 YAML 兜底，且不误写
+await check('configure_submodel: configEditor 缺失或宿主授权行缺失 → 手动 YAML / 只写插件', async () => {
+  const noEditor = makeWizardWorld({ noEditor: true });
+  await noEditor.apply();
+  const noEditorResult = await noEditor.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: noEditor.candidate });
+  assert(noEditorResult.includes('没有配置编辑器'), `实际: ${noEditorResult}`);
+  assert(noEditorResult.includes('请在 profile 补丁层'), '必须给手动两步 YAML');
+  assertEqual(noEditor.edits.length, 0);
+
+  const noHost = makeWizardWorld({ noHostEntry: true });
+  await noHost.apply();
+  const noHostResult = await noHost.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: noHost.candidate });
+  assert(noHostResult.includes('宿主授权行不存在'), `实际: ${noHostResult}`);
+  assert(noHostResult.includes('请按 README 手动添加该行'), '必须指向 README 手动步骤');
+  assertEqual(noHost.edits.length, 1, '宿主行缺失时只写插件配置');
+  assertEqual(noHost.edits[0].entryId, 'submodel');
 });
 
 // ── 输出 ─────────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 {
   "name": "dsh-submodel",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "官方 subagent 的默认策略包：装上一次配好「什么时候自己干、什么时候派出去、派给谁」。",
   "type": "module",
   "main": "lib/index.js",
@@ -8,6 +8,11 @@
     ".": "./lib/index.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
+  },
+  "scripts": {
+    "test": "npm run test:node && npm run test:python",
+    "test:node": "node tests/unit/flash-routing-fixture.mjs ./lib && node tests/unit/public-profile-smoke.mjs",
+    "test:python": "python -m unittest discover -s tests/unit -v"
   },
   "license": "MIT",
   "repository": {
@@ -25,10 +30,14 @@
   "peerDependencies": {
     "@deepseek-ai/schemastery": ">=3.18.4 <4.0.0"
   },
+  "devDependencies": {
+    "@deepseek-ai/schemastery": "^3.19.0"
+  },
   "files": [
     "lib",
     "cordis.patch.yml",
     "README.md",
+    "README.en.md",
     "LICENSE"
   ],
   "keywords": [

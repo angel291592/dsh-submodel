@@ -89,12 +89,15 @@ function makeHost({ nativeDefinition, modelSelectionVisible = true, presetServic
   return { fakeCtx, logs, registered, guards, listeners, assemblyListeners };
 }
 
-/** 干净的顶层 agent（非 Flash 主脑 → boss 模式）。 */
+/** 干净的顶层 agent（durable header 判 root；requestHeader 只供执行期读 config）。 */
 function rootCandidate() {
   return {
     id: 'clean-root',
     ctx: {},
-    session: { requestHeader: () => ({ id: 's-clean', config: { provider: 'deepseek-official', model: 'deepseek-flash' } }) },
+    session: {
+      header: { delegationDepth: 0 },
+      requestHeader: () => ({ id: 's-clean', config: { provider: 'deepseek-official', model: 'deepseek-flash' } }),
+    },
     options: { model: 'deepseek-flash' },
   };
 }
@@ -128,8 +131,9 @@ await check('干净配置: executor 未配置 → error 文案逐字匹配，且
     presetService: { composedPreset: () => 'standard' },
   });
   entry.apply(host.fakeCtx, entry.Config({ enabled: true }));
-  const expected = 'dsh-submodel: config.executor.provider/model 未配置，自动委派不可用；请按 README 配置';
-  assertEqual(host.logs.error, [expected], 'executor 未配置必须且只记一条 error');
+  const expected =
+    'dsh-submodel: config.executor.provider/model 未配置，自动委派不可用；可调用 `configure_submodel` 自动配置或按 README 两步配置';
+  assertEqual(host.logs.error, [expected], 'executor 未配置必须且只记一条 error（并指向自动配置向导）');
 });
 
 // ── ② 无 agentPresets 服务：每 agent 一次 warn ────────────────────────────────
@@ -206,6 +210,40 @@ await check('干净配置: 通用路由正常安装，正文含配置的执行�
     assert(!text.includes(leaked), `干净配置的正文不得出现本机路由名 ${leaked}`);
   }
   assertEqual(resolved.sections[0].interpolate, false, '策略段必须关闭插值');
+});
+
+// ── ⑥ 自动配置向导：executor 未配置时 root 可见 configure_submodel ────────────
+await check('干净配置: executor 未配置 + 原生 subagent 可见 → 注册 configure_submodel', async () => {
+  const candidate = rootCandidate();
+  const host = makeHost({
+    nativeDefinition: nativeWithRoute(),
+    presetService: { composedPreset: () => 'standard' },
+    candidates: [candidate],
+  });
+  entry.apply(host.fakeCtx, entry.Config({ enabled: true }));
+  await sleep(50);
+  assert(
+    host.registered.includes('configure_submodel'),
+    `executor 未配置时顶层必须注册自动配置向导；实际注册: ${host.registered.join(',') || '空'}`,
+  );
+  assert(host.registered.includes('delegate_task'), 'delegate_task 仍要注册');
+});
+
+// ── ⑦ 自动配置向导：executor 已配置时不再注册 ────────────────────────────────
+await check('干净配置: executor 已配置 → 不注册 configure_submodel', async () => {
+  const candidate = rootCandidate();
+  const host = makeHost({
+    nativeDefinition: nativeWithRoute(),
+    presetService: { composedPreset: () => 'standard' },
+    candidates: [candidate],
+  });
+  entry.apply(host.fakeCtx, entry.Config({ enabled: true, executor: CLEAN_EXECUTOR }));
+  await sleep(50);
+  assert(
+    !host.registered.includes('configure_submodel'),
+    `executor 已配置时不得再注册自动配置向导；实际注册: ${host.registered.join(',') || '空'}`,
+  );
+  assert(host.registered.includes('delegate_task'), 'delegate_task 仍要注册');
 });
 
 // ── 输出 ─────────────────────────────────────────────────────────────────────

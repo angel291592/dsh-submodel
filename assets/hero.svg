@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="300" viewBox="0 0 1280 300" role="img" aria-labelledby="hero-title hero-desc">
+  <title id="hero-title">dsh-submodel — delegation routing policy for the official subagent</title>
+  <desc id="hero-desc">A main model sends verifiable work to an executor route and hard problems to expert routes.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="0.55" stop-color="#101936"/>
+      <stop offset="1" stop-color="#171335"/>
+    </linearGradient>
+    <radialGradient id="glow-a" cx="0.12" cy="0.08" r="0.65">
+      <stop offset="0" stop-color="#3b82f6" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#3b82f6" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow-b" cx="0.92" cy="0.95" r="0.6">
+      <stop offset="0" stop-color="#8b5cf6" stop-opacity="0.3"/>
+      <stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.1"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.04"/>
+    </linearGradient>
+    <pattern id="grid" width="32" height="32" patternUnits="userSpaceOnUse">
+      <path d="M32 0H0V32" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/>
+    </pattern>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#a78bfa"/>
+    </marker>
+  </defs>
+
+  <rect width="1280" height="300" rx="20" fill="url(#bg)"/>
+  <rect width="1280" height="300" rx="20" fill="url(#grid)"/>
+  <rect width="1280" height="300" rx="20" fill="url(#glow-a)"/>
+  <rect width="1280" height="300" rx="20" fill="url(#glow-b)"/>
+  <rect x="1" y="1" width="1278" height="298" rx="19" fill="none" stroke="#ffffff" stroke-opacity="0.08"/>
+
+  <g font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+    <text x="64" y="138" fill="#f8fafc" font-size="56" font-weight="700" letter-spacing="-1.5">dsh-submodel</text>
+    <text x="66" y="180" fill="#94a3b8" font-size="22" letter-spacing="0.3">delegation routing policy for the official subagent</text>
+    <text x="66" y="220" fill="#64748b" font-size="16" letter-spacing="0.2">install once · route by intent · authorize once</text>
+  </g>
+
+  <line x1="624" y1="44" x2="624" y2="256" stroke="#ffffff" stroke-opacity="0.07"/>
+
+  <path d="M806 150L930 84" fill="none" stroke="url(#route)" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <path d="M806 150L930 216" fill="none" stroke="url(#route)" stroke-width="2.5" stroke-linecap="round" marker-end="url(#arrow)"/>
+  <circle cx="806" cy="150" r="4.5" fill="#93c5fd"/>
+
+  <g font-family="'Segoe UI','Helvetica Neue',Arial,sans-serif">
+    <rect x="650" y="112" width="156" height="76" rx="14" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="728" y="145" fill="#e2e8f0" font-size="18" font-weight="600" text-anchor="middle">main model</text>
+    <text x="728" y="168" fill="#94a3b8" font-size="12" text-anchor="middle">current request route</text>
+
+    <rect x="930" y="46" width="262" height="76" rx="14" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="1061" y="79" fill="#e2e8f0" font-size="18" font-weight="600" text-anchor="middle">executor</text>
+    <text x="1061" y="102" fill="#94a3b8" font-size="12" text-anchor="middle">cheap route · verifiable work</text>
+
+    <rect x="930" y="178" width="262" height="76" rx="14" fill="url(#card)" stroke="#ffffff" stroke-opacity="0.16"/>
+    <text x="1061" y="211" fill="#e2e8f0" font-size="18" font-weight="600" text-anchor="middle">experts</text>
+    <text x="1061" y="234" fill="#94a3b8" font-size="12" text-anchor="middle">strong routes · escalate on demand</text>
+  </g>
+</svg>

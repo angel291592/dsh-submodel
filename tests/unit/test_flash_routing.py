@@ -129,8 +129,8 @@ class PackageShapeTests(unittest.TestCase):
     """发布件的基本形态守卫（只读，不执行被测代码）。"""
 
     def test_module_files_exist(self) -> None:
-        """入口与两个职责模块必须存在。"""
-        for filename in ("index.js", "policy.js", "delegation.js"):
+        """入口、策略模块与自动配置向导模块必须存在。"""
+        for filename in ("index.js", "policy.js", "delegation.js", "setup.js"):
             with self.subTest(file=filename):
                 self.assertTrue((PLUGIN_LIB / filename).is_file(), msg=f"missing {filename}")
 
