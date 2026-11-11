@@ -1,0 +1,67 @@
+# release.yml —— 通过 npm Trusted Publishing（OIDC）自动发布，不在本机/仓库保存任何 npm 令牌。
+#
+# 触发方式：
+#   1) push `v*` tag：发布该 tag 对应的版本（要求 package.json 版本与 tag 一致）；
+#   2) 手动 workflow_dispatch：在默认分支（main）上发布 package.json 当前版本，
+#      用于首次接入 OIDC 或补发。
+#
+# 首次接入前置（在 npm 包设置里一次性配置，属敏感操作需过 npm 密码/2FA）：
+#   Provider: GitHub Actions
+#   Organization or user: angel291592
+#   Repository: dsh-submodel
+#   Workflow filename: release.yml
+#   Environment: （留空）
+#   并确认允许 **Direct publish（npm publish）**（2026-09-03 之后新建的配置默认只放行
+#   `npm stage publish`，需要勾选/添加 npm publish）。
+#
+# npm 侧要求：npm CLI >= 11.5.1；这里显式安装 npm@11，避免 runner 自带版本过旧。
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write # OIDC：让 npm 信任「本仓库 + 本工作流」，无需令牌
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 设置 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: 设置 Python（运行常驻回归测试）
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装支持 Trusted Publishing 的 npm
+        run: npm install -g npm@11
+
+      - name: 版本与 tag 一致性校验（tag 触发时）
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          node -e "const v=require('./package.json').version; if ('v'+v !== process.env.GITHUB_REF_NAME) { console.error('package.json version '+v+' != tag '+process.env.GITHUB_REF_NAME); process.exit(1); }"
+
+      - name: 安装依赖
+        run: npm install --no-audit --no-fund
+
+      - name: 自动化门禁
+        run: |
+          node tests/unit/flash-routing-fixture.mjs ./lib
+          node tests/unit/public-profile-smoke.mjs
+          python -m unittest discover -s tests/unit -v
+
+      - name: 发布到 npm（OIDC 可信发布，无令牌）
+        run: npm publish --access public

@@ -225,3 +225,18 @@ Current verification counts (CI runs the same commands on every push / PR, see `
 GUI end-to-end (the `configure_submodel` card and both writes, `delegate_task` delegation, and switching the
 main model to the execution route to enter economize mode) must be accepted by the user in a restarted real
 GUI session and is **not verified yet**.
+
+## Releasing (maintainers)
+
+Releases go through GitHub Actions + npm **Trusted Publishing (OIDC)**; no npm token is stored on this
+machine or in the repository:
+
+1. Add a `## <version> (YYYY-MM-DD)` section at the top of `CHANGELOG.md`;
+2. On `main`, run `pwsh scripts/release.ps1 <version>`: it runs the gates, bumps the `package.json`
+   version, commits, tags and pushes, then polls npm until the new version appears;
+3. The repository's `release` workflow (`.github/workflows/release.yml`) re-runs the tests after the tag
+   push and publishes with `npm publish`; the script tries to create the GitHub Release once npm confirms.
+
+One-time setup: configure a Trusted Publisher in the npm package settings (repository
+`angel291592/dsh-submodel`, workflow `release.yml`, allow Direct publish). After that, releasing needs no
+npm password, one-time code, or token.

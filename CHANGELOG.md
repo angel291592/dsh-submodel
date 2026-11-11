@@ -19,6 +19,9 @@
 - **文档与发布资产**：`README.en.md`（英文对应版）、`assets/hero.svg`（纯图形，不含任何渠道/模型名）、
   `.github/workflows/ci.yml`（push / PR 跑 fixture + smoke + Python 测试）；README 重写为
   hero 首屏 + 两步配置（宿主授权 / 插件配置）+ 路由规则 + 兼容性 + 故障排查。
+- **发布自动化**：`.github/workflows/release.yml` 通过 npm Trusted Publishing（OIDC）自动发布，
+  `scripts/release.ps1` 提供本机一键发版（门禁 → 版本 → tag → push → 验证），
+  本机与仓库均不保存 npm 令牌。
 
 ### 修复
 

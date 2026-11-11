@@ -207,3 +207,16 @@ node tests/unit/public-profile-smoke.mjs        # 干净用户配置的确定性
 
 GUI 端到端（`configure_submodel` 弹卡与两处写入、`delegate_task` 派工、主模型切到执行路由后进入
 economize 模式）需要在重启后的真实 GUI 会话里由用户验收，**尚未验证**。
+
+## 发版（维护者）
+
+发布走 GitHub Actions + npm **Trusted Publishing（OIDC）**，本机与仓库都不保存 npm 令牌：
+
+1. 在 `CHANGELOG.md` 顶部补 `## <版本>（YYYY-MM-DD）` 段；
+2. 在 `main` 分支运行 `pwsh scripts/release.ps1 <版本>`：跑门禁 → 改 `package.json` 版本 →
+   提交 → 打 tag → push，并轮询 npm 直到看到新版本；
+3. 仓库的 `release` 工作流（`.github/workflows/release.yml`）在 tag push 后再次跑测试并自动
+   `npm publish`；`scripts/release.ps1` 验证成功后会尽量创建 GitHub Release。
+
+首次接入需在 npm 包设置里一次性配置 Trusted Publisher（仓库 `angel291592/dsh-submodel`、
+工作流 `release.yml`，并允许 Direct publish），之后发版不再需要 npm 密码 / 动态码 / 令牌。
