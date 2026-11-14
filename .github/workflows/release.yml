@@ -14,6 +14,10 @@
 #   并确认允许 **Direct publish（npm publish）**（2026-09-03 之后新建的配置默认只放行
 #   `npm stage publish`，需要勾选/添加 npm publish）。
 #
+#   也可用 npm CLI 完成同一步（需 npm >= 11.15，先 `npm login`）：
+#     npm trust github dsh-submodel --file release.yml \
+#       --repo angel291592/dsh-submodel --allow-publish -y
+#
 # npm 侧要求：npm CLI >= 11.5.1；这里显式安装 npm@11，避免 runner 自带版本过旧。
 name: release
 
