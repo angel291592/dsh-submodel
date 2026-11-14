@@ -78,4 +78,4 @@ jobs:
             printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
           fi
           unset NODE_AUTH_TOKEN
-          npm publish --access public --provenance
+          npm publish --access public --provenance --loglevel verbose
