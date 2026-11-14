@@ -54,6 +54,13 @@ jobs:
         run: |
           node -e "const v=require('./package.json').version; if ('v'+v !== process.env.GITHUB_REF_NAME) { console.error('package.json version '+v+' != tag '+process.env.GITHUB_REF_NAME); process.exit(1); }"
 
+      - name: 发布诊断（npm 版本与 OIDC 环境）
+        run: |
+          echo "npm=$(npm --version)"
+          echo "node=$(node --version)"
+          echo "oidc_url=${ACTIONS_ID_TOKEN_REQUEST_URL:+set}"
+          echo "oidc_token=${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+set}"
+
       - name: 安装依赖
         run: npm install --no-audit --no-fund
 
@@ -71,4 +78,4 @@ jobs:
             printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
           fi
           unset NODE_AUTH_TOKEN
-          npm publish --access public
+          npm publish --access public --provenance
