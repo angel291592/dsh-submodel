@@ -64,4 +64,11 @@ jobs:
           python -m unittest discover -s tests/unit -v
 
       - name: 发布到 npm（OIDC 可信发布，无令牌）
-        run: npm publish --access public
+        # setup-node 的 registry-url 会往 .npmrc 写入 ${NODE_AUTH_TOKEN} 并填一个占位值，
+        # npm 11 一旦看到可用令牌就不再走 OIDC，结果是 404。发布前先清干净，确保只靠 OIDC。
+        run: |
+          if [ -n "$NPM_CONFIG_USERCONFIG" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+            printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
+          fi
+          unset NODE_AUTH_TOKEN
+          npm publish --access public
