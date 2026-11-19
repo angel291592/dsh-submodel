@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 设置 Node
         uses: actions/setup-node@v7
@@ -46,7 +46,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: 设置 Python（运行常驻回归测试）
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -68,8 +68,9 @@ jobs:
           python -m unittest discover -s tests/unit -v
 
       - name: 发布到 npm（OIDC 可信发布，无令牌）
-        # setup-node 的 registry-url 会往 .npmrc 写入 ${NODE_AUTH_TOKEN} 并填一个占位值，
-        # npm 11 一旦看到可用令牌就不再走 OIDC，结果是 404。发布前先清干净，确保只靠 OIDC。
+        # setup-node v4 会往 .npmrc 写入 ${NODE_AUTH_TOKEN} 并填一个占位值，
+        # npm 11 一旦看到可用令牌就不再走 OIDC，结果是 404。v7 已经不再导出这个占位值，
+        # 但这一步仍然保留：它保证「发布只依赖 OIDC」，而不是依赖某个 action 版本的具体行为。
         run: |
           if [ -n "$NPM_CONFIG_USERCONFIG" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
             printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
