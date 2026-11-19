@@ -46,7 +46,7 @@ jobs:
           registry-url: 'https://registry.npmjs.org'
 
       - name: 设置 Python（运行常驻回归测试）
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
