@@ -208,6 +208,13 @@ node tests/unit/public-profile-smoke.mjs        # 干净用户配置的确定性
 GUI 端到端（`configure_submodel` 弹卡与两处写入、`delegate_task` 派工、主模型切到执行路由后进入
 economize 模式）需要在重启后的真实 GUI 会话里由用户验收，**尚未验证**。
 
+## 参与贡献
+
+- 提 issue / PR 前先看[贡献指南](CONTRIBUTING.md)（English: [CONTRIBUTING.en.md](CONTRIBUTING.en.md)）：
+  要跑的三条测试、提交格式、以及不该带进仓库的东西都写在那里。
+- 安全问题请走私密渠道（[安全政策](SECURITY.md)），不要开公开 issue。
+- 参与本项目即视为同意[行为准则](CODE_OF_CONDUCT.md)。
+
 ## 发版（维护者）
 
 发布走 GitHub Actions + npm **Trusted Publishing（OIDC）**，本机与仓库都不保存 npm 令牌：

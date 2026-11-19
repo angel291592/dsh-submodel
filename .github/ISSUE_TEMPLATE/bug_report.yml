@@ -1,0 +1,105 @@
+name: Bug 报告
+description: 装上不生效、派工报错、或者行为和文档不一致。
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 先做两件事
+
+        1. **先看 README 的「故障排查」一节。** 那几条报错（`child LLM route "…" is not allowed for this Session`、
+           看不到 `configure_submodel`、`原生 subagent 未暴露 provider/model`）多数是宿主授权或 profile 的问题，
+           表里已经写了怎么处理。
+        2. **下面的内容请脱敏。** 不要贴 API Key、令牌、内网地址；真实渠道名和模型名用
+           `your-provider` / `your-model` 代替即可，脱敏不影响定位问题。
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: 怎么装的
+      options:
+        - dsh plugin add dsh-submodel（npm）
+        - 从源码 / 本地路径安装
+        - 其他 / 不确定
+    validations:
+      required: true
+
+  - type: input
+    id: dsh-version
+    attributes:
+      label: DSH 版本
+      description: 界面「关于」里显示的版本，或启动日志里的 desktopVersion。
+      placeholder: "0.2.2"
+    validations:
+      required: true
+
+  - type: input
+    id: plugin-version
+    attributes:
+      label: dsh-submodel 版本
+      description: npm 包版本；从源码装的写 commit。
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: 出问题的是哪一层
+      description: 这张表决定先看哪里，选错一格会走很多弯路。
+      options:
+        - 安装 / 启动阶段（插件没被加载）
+        - 配置阶段（configure_submodel 或手写 YAML）
+        - 派工阶段（调用 delegate_task 报错或派错目标）
+        - 行为不符（能跑，但策略判断和文档说的不一样）
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: profile 补丁里的 submodel 配置（脱敏后）
+      description: |
+        profile 补丁（`cordis.patch.yml`，路径与格式见 README「方式 B」）里与 `submodel` 相关的条目。
+        宿主授权（`subagent-model-selection-settings` 的 allowedModels）也请一并贴出并脱敏。
+      render: yaml
+      placeholder: |
+        - id: submodel
+          config:
+            executor:
+              provider: your-provider
+              model: your-model
+            experts: []
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤与预期
+      description: 具体做了什么 → 期望发生什么 → 实际发生了什么。
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 报错原文
+      description: 从启动日志里截相关那几行即可；注意把渠道名、模型名、路径替换掉。
+      render: console
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 确认
+      options:
+        - label: 我已经读过 README 的「故障排查」，并确认不只是宿主授权没配。
+          required: true
+        - label: 我贴出的内容已脱敏（无 API Key、令牌、内网地址、真实渠道名与模型名）。
+          required: true
+        - label: 我搜索过已有 issue，这不是重复报告。
+          required: true

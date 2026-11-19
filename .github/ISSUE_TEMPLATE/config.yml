@@ -1,0 +1,10 @@
+# Issue 模板选择器配置。
+#
+# blank_issues_enabled: true —— 这是个插件，用法问题（"这样配对不对"）比缺陷更多，
+# 强制走表单会把这类提问挡在门外。真正的缺陷，表单里那几格能把定位信息一次问全。
+blank_issues_enabled: true
+contact_links:
+  # 安全问题不走公开 issue（SECURITY.md 明写「请私下报告，不要开公开 issue」）。
+  - name: 报告安全问题（私密）
+    url: https://github.com/angel291592/dsh-submodel/security/advisories/new
+    about: 安全类问题请走私密 advisory，不要开公开 issue；范围与响应方式见 SECURITY.md。

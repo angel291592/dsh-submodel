@@ -226,6 +226,13 @@ GUI end-to-end (the `configure_submodel` card and both writes, `delegate_task` d
 main model to the execution route to enter economize mode) must be accepted by the user in a restarted real
 GUI session and is **not verified yet**.
 
+## Contributing
+
+- Read [CONTRIBUTING.en.md](CONTRIBUTING.en.md) ([简体中文](CONTRIBUTING.md)) before opening an issue or a
+  pull request: it lists the three test suites, the commit format, and what must not end up in the repo.
+- Security problems go through the private channel in [SECURITY.en.md](SECURITY.en.md), not a public issue.
+- By participating you agree to the [Code of Conduct](CODE_OF_CONDUCT.en.md).
+
 ## Releasing (maintainers)
 
 Releases go through GitHub Actions + npm **Trusted Publishing (OIDC)**; no npm token is stored on this

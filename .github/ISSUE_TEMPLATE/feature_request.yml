@@ -1,0 +1,60 @@
+name: 功能建议
+description: 提出一个能力，或论证某条设计边界应该挪动。
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 先说问题，再谈方案
+
+        这个项目只做一件事：给官方 `subagent` 配一套可复用的默认派工策略，并提供统一的委派入口
+        `delegate_task`。说清你**今天做不了什么**，比说「我想加一个参数」更容易得到有用的答复。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决的是什么问题
+      description: 具体的工作场景、现在卡在哪一步、没有它会怎样。
+    validations:
+      required: true
+
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 你现在怎么绕过
+      description: 手工步骤、另一个工具、或者「干脆不检查」。这是这个功能值多少的直接证据。
+    validations:
+      required: true
+
+  - type: dropdown
+    id: boundary
+    attributes:
+      label: 是否触及已知边界
+      description: 选中一项不是拒绝——是最快拿到「这条边界为什么画在这里」的答案的路径。
+      options:
+        - 新建 provider 体系 / 自带 API Key（插件只读已有配置）
+        - 改 DSH 本体或官方包（应报上游）
+        - 需要联网或托管服务
+        - 以上都不是
+        - 不确定
+    validations:
+      required: true
+
+  - type: textarea
+    id: shape
+    attributes:
+      label: 你想要的结果长什么样
+      description: 可选，但很有用：新的配置字段、工具参数、提示词段落，以及你打算怎么用它。
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: 确认
+      options:
+        - label: 我读过 README 的「与官方插件的边界」和「已知限制」两节。
+          required: true
+        - label: 这条建议里不含我的私有渠道名、模型名或真实配置内容。
+          required: true

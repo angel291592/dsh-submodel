@@ -1,0 +1,17 @@
+version: 2
+# 只提依赖更新提案，不自动合并：合并前照常跑 ci.yml 的三套测试。
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      deepseek-ai:
+        patterns:
+          - "@deepseek-ai/*"
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
