@@ -39,6 +39,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function makeHost({ nativeDefinition, modelSelectionVisible = true, presetService, candidates = [] }) {
   const logs = { info: [], warn: [], error: [] };
   const registered = [];
+  const sections = [];
   const guards = [];
   const listeners = [];
   const assemblyListeners = [];
@@ -69,7 +70,7 @@ function makeHost({ nativeDefinition, modelSelectionVisible = true, presetServic
       error: (message) => logs.error.push(message),
     },
     tools,
-    systemPrompt: { section: () => () => {} },
+    systemPrompt: { section: (definition) => { sections.push(definition); return () => {}; } },
     on: (event, callback) => {
       listeners.push([event, callback]);
       return () => {};
@@ -86,7 +87,7 @@ function makeHost({ nativeDefinition, modelSelectionVisible = true, presetServic
       },
     };
   }
-  return { fakeCtx, logs, registered, guards, listeners, assemblyListeners };
+  return { fakeCtx, logs, registered, guards, listeners, assemblyListeners, sections };
 }
 
 /** 干净的顶层 agent（durable header 判 root；requestHeader 只供执行期读 config）。 */
@@ -244,6 +245,23 @@ await check('干净配置: executor 已配置 → 不注册 configure_submodel',
     `executor 已配置时不得再注册自动配置向导；实际注册: ${host.registered.join(',') || '空'}`,
   );
   assert(host.registered.includes('delegate_task'), 'delegate_task 仍要注册');
+});
+
+// ── ⑧ 团队队形自检默认关闭：干净配置只注册策略段 ────────────────────────────────
+await check('干净配置: teamFit 默认关闭 → 只注册策略段，不出现自检段（默认即回滚态）', async () => {
+  const candidate = rootCandidate();
+  const host = makeHost({
+    nativeDefinition: nativeWithRoute(),
+    presetService: { composedPreset: () => 'standard' },
+    candidates: [candidate],
+  });
+  entry.apply(host.fakeCtx, entry.Config({ enabled: true, executor: CLEAN_EXECUTOR }));
+  await sleep(50);
+  assertEqual(
+    host.sections.map((section) => section.name),
+    ['tool:model-routing'],
+    '默认配置不得注册 tool:team-fit（teamFit.enabled 默认 false）',
+  );
 });
 
 // ── 输出 ─────────────────────────────────────────────────────────────────────

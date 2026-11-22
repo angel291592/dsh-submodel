@@ -57,11 +57,13 @@ function assertThrows(fn, message) {
 const policyUrl = pathToFileURL(resolvePath(libDir, 'policy.js')).href;
 const delegationUrl = pathToFileURL(resolvePath(libDir, 'delegation.js')).href;
 const setupUrl = pathToFileURL(resolvePath(libDir, 'setup.js')).href;
+const teamFitUrl = pathToFileURL(resolvePath(libDir, 'team-fit.js')).href;
 const entryUrl = pathToFileURL(resolvePath(libDir, 'index.js')).href;
 
 const policy = await import(policyUrl);
 const delegation = await import(delegationUrl);
 const setup = await import(setupUrl);
+const teamFit = await import(teamFitUrl);
 const entry = await import(entryUrl);
 
 /**
@@ -854,6 +856,7 @@ await check('index.js Config: 默认值（enabled=true、preset=standard、execu
   assert(parsed.guardNativeSubagent === true);
   assert(parsed.autoConfigure === true, '自动配置向导默认开启');
   assertEqual(parsed.economyRoutes, [], '经济路由默认空 = 保留 flash 后缀兼容');
+  assertEqual(parsed.teamFit, { enabled: false }, '团队队形自检默认关闭（需显式开启，关掉即回滚）');
   const configured = entry.Config({
     autoConfigure: false,
     economyRoutes: [{ provider: 'eco-provider', model: 'eco-model' }],
@@ -2183,6 +2186,243 @@ await check('configure_submodel: configEditor 缺失或宿主授权行缺失 →
   assert(noHostResult.includes('请按 README 手动添加该行'), '必须指向 README 手动步骤');
   assertEqual(noHost.edits.length, 1, '宿主行缺失时只写插件配置');
   assertEqual(noHost.edits[0].entryId, 'submodel');
+});
+
+// ── 12. 团队队形自检（tool:team-fit）：纯函数 + 假宿主入口接线 ────────────────
+const FIT_INPUT = { role: 'root', preset: 'standard', presetId: 'standard', teamEnabled: true };
+const FIT_TEXT = teamFit.teamFitTextFor(FIT_INPUT);
+
+await check('team-fit：段名唯一', () => {
+  assertEqual(teamFit.TEAM_FIT_SECTION, 'tool:team-fit');
+});
+await check('team-fit：主脑 + standard + 团队开 → 三行连续且顺序固定', () => {
+  assert(FIT_TEXT !== '', '正例必须产出正文');
+  assert(
+    /^可并行性：[^\n]+\n串行点：[^\n]+\n决定：/m.test(FIT_TEXT),
+    `三个行首必须连续且顺序固定；实际开头: ${FIT_TEXT.slice(0, 120)}`,
+  );
+});
+await check('team-fit：正文含串行决定、依赖、模型分配、独立审查与提交纪律', () => {
+  for (const phrase of ['本次串行，不用任务板', 'blocked_by', '模型分配', '独立审查', 'git commit/push']) {
+    assert(FIT_TEXT.includes(phrase), `正文缺少：${phrase}`);
+  }
+});
+await check('team-fit：团队关 / 状态未知 / 子代理 / 未知角色 / 其他预设 / 无预设证据 → 空串', () => {
+  for (const [label, patch] of [
+    ['团队关', { teamEnabled: false }],
+    ['团队状态未知', { teamEnabled: undefined }],
+    ['子代理', { role: 'child' }],
+    ['未知角色', { role: undefined }],
+    ['其他预设', { preset: 'other' }],
+    ['无预设证据', { preset: undefined, presetId: undefined }],
+    ['预设 id 为空串', { presetId: '   ' }],
+  ]) {
+    assertEqual(teamFit.teamFitTextFor({ ...FIT_INPUT, ...patch }), '', `${label} 应返回空串`);
+  }
+});
+
+/** 首轮 fake 主脑：requestHeader() 尚无值，角色证据只在 durable session.header。 */
+const fitAgent = {
+  ctx: {},
+  options: {},
+  session: { id: 'first-session', header: { id: 'first-session' }, requestHeader: () => undefined },
+};
+const fitAssembly = { agent: fitAgent, scope: fitAgent };
+
+/** 假宿主：收集 systemPrompt 段；TEAM_POLICY=600；团队/预设服务可动态替换。 */
+function makeTeamFitHost() {
+  const sections = [];
+  const services = {
+    agentPresets: { composedPreset: (scope) => (scope === fitAgent.ctx ? 'standard' : undefined) },
+    agentTeams: { isEnabled: (caller) => caller === fitAgent },
+  };
+  const boardTool = { name: 'team_task_create' };
+  const admitted = { view: (scope) => new Map(scope === fitAgent ? [[boardTool.name, boardTool]] : []) };
+  const excluded = { view: () => new Map() };
+  const tools = {
+    // 两个参数的调用只能看到"工具注册了"；第三个参数才是本步获准集合，别混。
+    get: (name, scope, toolSet) => toolSet === undefined
+      ? (name === boardTool.name ? boardTool : undefined)
+      : toolSet.view(scope).get(name),
+    register: () => () => {},
+    guard: () => () => {},
+  };
+  const register = (config) => {
+    sections.length = 0;
+    entry.apply(
+      {
+        logger: { info() {}, warn() {}, error() {} },
+        on: () => () => {},
+        get: (name) => services[name],
+        systemPrompt: {
+          section: (definition) => {
+            sections.push(definition);
+            return () => {};
+          },
+          getSectionOrder: (name) => (name === 'TEAM_POLICY' ? 600 : undefined),
+        },
+        tools,
+      },
+      entry.Config(config),
+    );
+    return sections;
+  };
+  return { sections, services, boardTool, admitted, excluded, tools, register };
+}
+
+const fitHost = makeTeamFitHost();
+
+await check('入口：总开关关时即使 teamFit.enabled=true 也只注册策略段', () => {
+  assertEqual(
+    fitHost.register({ enabled: false, teamFit: { enabled: true } }).map((section) => section.name),
+    ['tool:model-routing'],
+  );
+});
+await check('入口：配置缺省（不写 teamFit）只注册策略段', () => {
+  assertEqual(fitHost.register({ enabled: true }).map((section) => section.name), ['tool:model-routing']);
+});
+await check('入口：teamFit.enabled=false 即回滚，只注册策略段', () => {
+  assertEqual(
+    fitHost.register({ enabled: true, teamFit: { enabled: false } }).map((section) => section.name),
+    ['tool:model-routing'],
+  );
+});
+const bothSections = fitHost.register({ enabled: true, teamFit: { enabled: true } });
+await check('入口：两个段各注册一次，自检段紧随 TEAM_POLICY（601）', () => {
+  assertEqual(
+    bothSections.map((section) => [section.name, section.order]),
+    [
+      ['tool:model-routing', 2850],
+      ['tool:team-fit', 601],
+    ],
+  );
+});
+const fitSectionText = bothSections.find((section) => section.name === teamFit.TEAM_FIT_SECTION).text;
+
+await check('入口：首轮 requestHeader() 尚无值也能显示（读 durable header）', () => {
+  assertEqual(fitSectionText(fitAssembly), FIT_TEXT);
+});
+await check('入口：上下文缺 agent、scope 不匹配或 agent 无 ctx → 隐藏', () => {
+  assertEqual(
+    [
+      fitSectionText({}),
+      fitSectionText({ ...fitAssembly, scope: fitAgent.ctx }),
+      fitSectionText({ agent: { session: fitAgent.session }, scope: undefined }),
+    ],
+    ['', '', ''],
+  );
+});
+await check('入口：会话身份不一致（header.id ≠ session.id）→ 隐藏', () => {
+  fitAgent.session.id = 'another-session';
+  try {
+    assertEqual(fitSectionText(fitAssembly), '');
+  } finally {
+    fitAgent.session.id = 'first-session';
+  }
+});
+await check('入口：origin / delegationDepth 标记的子代理不可见', () => {
+  for (const child of [{ origin: 'subagent' }, { delegationDepth: 1 }]) {
+    fitAgent.session.header = { id: 'first-session', ...child };
+    assertEqual(fitSectionText(fitAssembly), '', `子代理标记 ${JSON.stringify(child)} 必须隐藏`);
+  }
+  fitAgent.session.header = { id: 'first-session' };
+});
+await check('入口：普通用户 fork 带 parentSession 仍保留主脑视图', () => {
+  fitAgent.session.header = { id: 'first-session', parentSession: 'user-fork-source' };
+  try {
+    assertEqual(fitSectionText(fitAssembly), FIT_TEXT);
+  } finally {
+    fitAgent.session.header = { id: 'first-session' };
+  }
+});
+await check('入口：运行时 options.subagentDepth>0 也会隐藏', () => {
+  fitAgent.options.subagentDepth = 1;
+  try {
+    assertEqual(fitSectionText(fitAssembly), '');
+  } finally {
+    delete fitAgent.options.subagentDepth;
+  }
+});
+await check('入口：身份未知（session.header 缺失）时不把默认 root 当证据', () => {
+  delete fitAgent.session.header;
+  try {
+    assertEqual(fitSectionText(fitAssembly), '');
+  } finally {
+    fitAgent.session.header = { id: 'first-session' };
+  }
+});
+await check('入口：其他预设 / 无预设服务 / 预设查询异常 → 隐藏', () => {
+  const presets = fitHost.services.agentPresets;
+  fitHost.services.agentPresets = { composedPreset: () => 'other' };
+  assertEqual(fitSectionText(fitAssembly), '', '其他预设不可见');
+  fitHost.services.agentPresets = {
+    composedPreset: () => {
+      throw new Error('composing');
+    },
+  };
+  assertEqual(fitSectionText(fitAssembly), '', 'composedPreset 抛错时必须隐藏，不向宿主抛');
+  delete fitHost.services.agentPresets;
+  assertEqual(fitSectionText(fitAssembly), '', '无 agentPresets 服务时不可见');
+  fitHost.services.agentPresets = presets;
+});
+await check('入口：团队开关动态切换（true → false → true）即时生效', () => {
+  const teams = fitHost.services.agentTeams;
+  fitHost.services.agentTeams = { isEnabled: () => false };
+  assertEqual(fitSectionText(fitAssembly), '', '团队关闭时隐藏');
+  fitHost.services.agentTeams = { isEnabled: () => true };
+  assertEqual(fitSectionText(fitAssembly), FIT_TEXT, '团队开启时显示');
+  fitHost.services.agentTeams = { isEnabled: () => false };
+  assertEqual(fitSectionText(fitAssembly), '', '再次关闭时隐藏');
+  fitHost.services.agentTeams = teams;
+});
+const teamStep = { ...fitAssembly, toolSet: fitHost.admitted };
+await check('入口：明确 isEnabled=false 优先于本步已获批的团队工具 → 隐藏', () => {
+  fitHost.services.agentTeams.isEnabled = () => false;
+  try {
+    assertEqual(fitSectionText(teamStep), '');
+  } finally {
+    fitHost.services.agentTeams.isEnabled = (caller) => caller === fitAgent;
+  }
+});
+await check('入口：团队服务缺失时，凭本步获批的 team_task_create 显示', () => {
+  delete fitHost.services.agentTeams;
+  try {
+    assertEqual(fitSectionText(teamStep), FIT_TEXT, '本步工具集合是正向证据');
+    assertEqual(fitSectionText(fitAssembly), '', '没有本步工具集合时不能仅凭注册表判断');
+  } finally {
+    fitHost.services.agentTeams = { isEnabled: (caller) => caller === fitAgent };
+  }
+});
+await check('入口：工具已注册但本步未获准 / 空工具集合 → 隐藏', () => {
+  // 两参 tools.get 能看到注册表里的 team_task_create，但缺少第三个参数（本步 toolSet）不能当证据。
+  const teams = fitHost.services.agentTeams;
+  delete fitHost.services.agentTeams;
+  try {
+    assertEqual(fitSectionText(fitAssembly), '');
+    assertEqual(fitSectionText({ ...fitAssembly, toolSet: fitHost.excluded }), '');
+  } finally {
+    fitHost.services.agentTeams = teams;
+  }
+});
+await check('入口：团队服务抛错时仍按本步工具集合判断，回退查询失败也不影响组装', () => {
+  fitHost.services.agentTeams = {
+    isEnabled() {
+      throw new Error('service unavailable');
+    },
+  };
+  try {
+    assertEqual(fitSectionText(teamStep), FIT_TEXT, '服务抛错 + 本步获批 → 显示');
+    assertEqual(fitSectionText(fitAssembly), '', '服务抛错 + 无本步证据 → 隐藏');
+    assertEqual(
+      fitSectionText({ ...fitAssembly, toolSet: { view() { throw new Error('unavailable'); } } }),
+      '',
+    );
+  } finally {
+    fitHost.services.agentTeams = { isEnabled: (caller) => caller === fitAgent };
+  }
+});
+await check('入口：重复组装幂等且无写入副作用', () => {
+  assertEqual([fitSectionText(fitAssembly), fitSectionText(fitAssembly)], [FIT_TEXT, FIT_TEXT]);
 });
 
 // ── 输出 ─────────────────────────────────────────────────────────────────────

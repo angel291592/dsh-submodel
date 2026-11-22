@@ -2,6 +2,48 @@
 
 本包是作者自建路由插件策略层的公版化产物；公开名定为 `dsh-submodel`。
 
+## 0.3.0（2026-11-23）
+
+**可选的「团队队形自检」。** 同时启用官方 Agent Teams 与本包后，顶层主代理在每轮实际任务开始前先判断
+是否并行、开几个队友、每个用什么模型，并用固定三个行首报给用户。默认关闭，关掉即回滚。
+
+### 新增
+
+- **`teamFit.enabled` 配置字段**（默认 `false`，服从 `enabled` 总开关）：两者同时为 `true` 时注册一次
+  系统提示词段 `tool:team-fit`，顺序取官方 `TEAM_POLICY`(600) + 1（=601），排在团队策略段之后。
+- **自检正文**（`lib/team-fit.js`）：`teamFitTextFor({ role, preset, presetId, teamEnabled })` 纯函数；
+  正文规定三行顺序（`可并行性：` / `串行点：` / `决定：`）、串行时固定「本次串行，不用任务板」、
+  并行时写「并行 N 个队友」并在同一行写清工作/负责人/写域/具体模型/验收方法/依赖、任务板字段
+  `write_scopes` / `blocked_by`、模型分配复用本包路由、独立审查用全新上下文、共享文件与提交归主代理。
+- **中英文 README**：配置字段表、启用方式与回滚方式、验证计数同步；CHANGELOG 记录本版本。
+
+### 适配与门控
+
+- 段正文在**每次组装提示词时**现判：`scope === agent`、`agent.session.header.id === agent.session.id`
+  （首轮 `requestHeader()` 可能尚无值；普通用户 fork 只带 `parentSession`，不算子代理）、
+  `roleOf(agent)` 为主代理、`agentPresets.composedPreset(agent.ctx)` 等于目标 `preset`（默认 `standard`）。
+- 团队状态优先 `ctx.get('agentTeams').isEnabled(agent)`；仅服务缺失或抛错、且本步有 `toolSet` 时，
+  才用 `ctx.tools.get('team_task_create', agent, toolSet)`（第三个参数是本步获准集合）回退判断。
+- 条件不满足或查询异常一律返回空串（宿主省略整段）；提示词组装与重试**无写入副作用**，不注册工具、
+  不装 guard。团队关闭、非目标预设、子代理、服务异常时都不显示。
+
+### 兼容性
+
+- `teamFit` 默认 `false`，不开启时行为与 0.2.0 完全一致；`engines.dsh` 与 peer 依赖范围不变。
+- 团队队形自检依赖官方 Agent Teams 服务；未启用时该段自动隐藏。
+- 回滚：把 `teamFit.enabled` 设为 `false` 并重启 profile（不必卸载插件）。
+
+### 验证（2026-11-23 实测，均从当前开源工作树加载）
+
+- `node tests/unit/flash-routing-fixture.mjs ./lib` → **126 条断言，failed 0**（改前 104，新增 22：
+  正文纯函数 4 条 + 入口/门控 18 条；含首轮主代理、团队开关动态切换、子代理、普通用户 fork、
+  其他预设、服务缺失/抛错、工具已注册但本步未获准、默认关闭回滚）。
+- `python -m unittest discover -s tests/unit` → **7 个用例 OK**（发布件形态守卫纳入 `team-fit.js`）。
+- `node tests/unit/public-profile-smoke.mjs` → **8 条断言，failed 0**（改前 7，新增默认关闭 1 条）。
+- `npm pack` 清单包含 `lib/team-fit.js`。
+- **未验证**：真实 GUI 首轮对话的实际回复/任务板/队友数（需重启后的新会话验收）；本包在真实宿主上的
+  装载（参考实现已在 DSH `0.2.2-rc.5` 桌面会话中出现过自检正文，本移植的宿主 API 契约按官方源码核对）。
+
 ## 0.2.0（2026-11-11）
 
 **通用自动配置 + DSH 0.2.2 适配收口。** 模式判定由「模型名后缀」改为「路由」，新增 `configure_submodel`

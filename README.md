@@ -14,7 +14,9 @@
 
 它**不新建 provider 体系**——只读你 profile 里已有的渠道与模型配置，把委派策略写进系统提示词，
 并给官方 `subagent` 补一个统一的委派入口 `delegate_task`。0.2.0 起模式按**路由**判定（不再依赖
-模型命名约定），并提供首次配置向导与 `economyRoutes`；要求 DSH `0.2.2-rc.1`（`0.2.1` 及更早不兼容）。
+模型命名约定），并提供首次配置向导与 `economyRoutes`；0.3.0 起可**可选**开启「团队队形自检」：
+同时启用官方 Agent Teams 后，顶层主代理在首轮实际任务前先声明是否并行、开几个队友、每个用什么模型
+（默认关闭）。要求 DSH `0.2.2-rc.1`（`0.2.1` 及更早不兼容）。
 
 ## 安装
 
@@ -94,6 +96,7 @@ YAML，并且**不会写任何配置**。
 | `enabled` | `true` | 总开关；`false` 时只注册一个空段，不装任何工具/guard |
 | `autoConfigure` | `true` | 是否在首次配置时注册 `configure_submodel` 向导（顶层主代理且 `executor` 未配置才可见）；关掉后完全手动配置 |
 | `preset` | `standard` | 只对这个 composition 生效 |
+| `teamFit.enabled` | `false` | 团队队形自检段开关（0.3.0+）：需总开关 `enabled` 同时为 `true`、并启用官方 Agent Teams；只对目标 preset 的顶层主代理显示，详见下文。默认关闭 = 回滚态 |
 | `executor.provider` / `executor.model` | 空 | 执行路由：强主脑的默认派工目标；**留空会记 error 日志**（见故障排查）。主模型切到这条路由本身也等于进入 Flash 模式 |
 | `executor.reasoningEffort` | `max` | 只在调用方没显式指定档位时作缺省 |
 | `economyRoutes` | `[]` | 额外声明「便宜路由」，每项 `{provider?, model}`：本次请求命中任一项即算 Flash（economize）模式。`provider` 省略时只按 `model` 匹配；**非空时旧的 flash 后缀规则不再生效** |
@@ -138,6 +141,43 @@ YAML，并且**不会写任何配置**。
 { "description": "复核状态机", "prompt": "<完整任务说明>", "provider": "your-provider", "model": "your-model" }
 ```
 
+## 团队队形自检（可选，0.3.0+）
+
+这是给**启用了 Agent Teams 的用户**的附加提示词段，默认关闭。打开后，顶层主代理在每轮实际任务
+开始前先判断「能不能并行、开几个队友、每个用什么模型」，并把结论用下面三个行首连续报给你：
+
+```
+可并行性：
+串行点：
+决定：
+```
+
+- **问候不触发**；普通追问、进度查询和重试沿用已经给出的决定，只有任务范围或可改动文件范围变化才重判。
+- **串行**时第三行固定为「决定：本次串行，不用任务板」：任务板新增 0 项、启动队友 0 个，主代理自己做完。
+- **并行**时写「决定：并行 N 个队友」，并在同一行写清每块工作、负责人、写域（只读也注明）、具体模型、
+  验收方法和依赖；只有能拆成 2–4 个互不争写、可独立验收的块时才并行。
+- 并行时任务板记录每块的 `write_scopes` 与 `blocked_by`；共享文件、集成、提交和最终验证由主代理独占。
+- 模型分配沿用本包已有的模型路由（见上一节）：普通执行块走 `delegate_task`；独立审查使用全新上下文；
+  升级专家仍按「问题复杂度 / 执行瓶颈」判据，不因审查或风险标签直接跳档。
+
+**前提与开关**：需要同时满足 ① 官方 Agent Teams 已启用；② 本包 `enabled: true`（默认）；
+③ `teamFit.enabled: true`（默认 `false`）。只对目标 `preset`（默认 `standard`）的**顶层主代理**生效；
+子代理与其他 composition 不显示；普通用户 fork 出来的会话（只带 `parentSession`）仍按主脑处理。
+
+```yaml
+# 只追加这一项；profile 补丁会整段替换 config，已有字段必须一起保留。
+- id: submodel
+  config:
+    teamFit:
+      enabled: true
+```
+
+> 上面只示范新增字段。若你已有 `executor` / `experts` 等配置，请在同一 `config` 块里一并保留——
+> profile 补丁是**整段替换**，不会逐字段合并。
+
+**回滚**：把 `teamFit.enabled` 设为 `false` 并重启 profile 即可完全关闭（不必卸载插件）；
+总开关 `enabled: false` 同样有效。团队关闭或服务查询失败时，这段正文自动隐藏，不影响其他提示词。
+
 ## 与官方插件的边界
 
 | 能力 | 提供方 |
@@ -177,6 +217,7 @@ fail-fast：启动期的告警只记日志、绝不抛；只有你主动调用�
   不创建渠道/密钥，也不改其他插件。
 - 模型元数据里没有价格字段，哪些路由算"便宜"由你的配置决定（向导只做候选预填，不替你拍板）。
 - 非 GUI 客户端没有提问卡可用，只能用「方式 B」手动 YAML。
+- 团队队形自检只做**提示词约束**：是否并行、开几个队友仍由主代理判断，不强制；它也不会替你开启 Agent Teams。
 
 ## 回滚
 
@@ -185,6 +226,8 @@ dsh plugin --profile <你的 profile> remove dsh-submodel
 ```
 
 插件移除后，宿主授权行仍在 profile 补丁里；如需一并撤销，手动删除 `subagent-model-selection-settings` 条目即可。
+
+只关团队队形自检、保留其他功能：把 `teamFit.enabled` 设为 `false` 并重启 profile（不必卸载插件）。
 
 ## 开发与验证
 
@@ -201,12 +244,14 @@ node tests/unit/public-profile-smoke.mjs        # 干净用户配置的确定性
 
 | 检查 | 结果 |
 |---|---|
-| fixture | **104** 条断言，`failed: 0` |
+| fixture | **126** 条断言，`failed: 0` |
 | Python 驱动 | **7** 个用例 `OK` |
-| 公共 profile 冒烟 | **7** 条断言，`failed: 0` |
+| 公共 profile 冒烟 | **8** 条断言，`failed: 0` |
 
 GUI 端到端（`configure_submodel` 弹卡与两处写入、`delegate_task` 派工、主模型切到执行路由后进入
-economize 模式）需要在重启后的真实 GUI 会话里由用户验收，**尚未验证**。
+economize 模式）需要在重启后的真实 GUI 会话里由用户验收，**尚未验证**。团队队形自检的确定性部分
+（三行正文、身份/预设/团队状态门控、默认关闭与回滚）已由 fixture 覆盖；真实 GUI 首轮对话里的
+实际回复与队友数同样需要在新会话里验收。
 
 ## 参与贡献
 

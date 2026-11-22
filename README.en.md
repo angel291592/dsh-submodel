@@ -15,8 +15,10 @@
 It does **not** ship its own provider system — it reads the channels and models already configured in your
 profile, writes a delegation policy into the system prompt, and adds one unified entry point
 (`delegate_task`) on top of the official `subagent`. Since 0.2.0 the mode is decided by **route** (no model
-naming convention required), and there is a first-run setup wizard plus `economyRoutes`. Requires DSH
-`0.2.2-rc.1` (`0.2.1` and older are not compatible).
+naming convention required), and there is a first-run setup wizard plus `economyRoutes`. Since 0.3.0 you can
+optionally enable the **team formation self-check**: with Agent Teams enabled, the top-level main model declares
+whether to parallelise, how many teammates to start, and which model each one uses before the first real task
+(off by default). Requires DSH `0.2.2-rc.1` (`0.2.1` and older are not compatible).
 
 ## Install
 
@@ -102,6 +104,7 @@ Full field reference:
 | `enabled` | `true` | Master switch; when `false`, only an empty prompt section is registered and no tools/guards are installed |
 | `autoConfigure` | `true` | Whether to register the `configure_submodel` wizard for first-run setup (visible only for a top-level agent whose `executor` is not configured); turn it off to configure everything manually |
 | `preset` | `standard` | Only applies to that composition |
+| `teamFit.enabled` | `false` | Team formation self-check section (0.3.0+): needs the master `enabled` switch to be `true` as well, plus the official Agent Teams plugin; visible only to the top-level main model of the target preset — see below. Off by default, which is the rollback state |
 | `executor.provider` / `executor.model` | empty | Execution route: the default delegation target in boss mode; **leaving it empty logs an `error`** (see Troubleshooting). Switching the main model to this route also means Flash mode |
 | `executor.reasoningEffort` | `max` | Default effort only when the caller did not specify one |
 | `economyRoutes` | `[]` | Extra "cheap routes", each `{provider?, model}`: the current request matching any of them counts as Flash (`economize`) mode. Omit `provider` to match on `model` alone; **when non-empty, the legacy flash-suffix rule no longer applies** |
@@ -151,6 +154,52 @@ Two typical calls:
 { "description": "review the state machine", "prompt": "<complete task>", "provider": "your-provider", "model": "your-model" }
 ```
 
+## Team formation self-check (optional, 0.3.0+)
+
+This is an extra prompt section for users who have **Agent Teams enabled**; it is off by default. When
+enabled, the top-level main model first decides "can this be parallelised, how many teammates, which model
+for each" before every real task and reports the conclusion in three fixed leading lines:
+
+```
+可并行性：
+串行点：
+决定：
+```
+
+- Greetings do not trigger it; follow-up questions, progress queries and retries reuse the earlier decision,
+  and it re-evaluates only when the task scope or the set of editable files changes.
+- **Serial**: the third line is exactly "决定：本次串行，不用任务板" — zero task-board entries and zero
+  teammates, and the main model does the work itself.
+- **Parallel**: the third line is "决定：并行 N 个队友", followed on the same line by each block's work,
+  owner, write scope (read-only also stated), concrete model, acceptance method and dependencies; only 2–4
+  mutually non-conflicting, independently verifiable blocks qualify.
+- In parallel mode the task board records each block's `write_scopes` and `blocked_by`; shared files,
+  integration, commits and final verification stay with the main model.
+- Model assignment reuses this package's routing (see the previous section): execution blocks go through
+  `delegate_task`; independent reviews use a fresh context; escalation still follows "problem complexity /
+  execution bottleneck" and never a review or risk label alone.
+
+Requirements: (1) the official Agent Teams plugin is enabled; (2) this package's `enabled: true` (default);
+(3) `teamFit.enabled: true` (default `false`). It only applies to the **top-level main model** of the target
+`preset` (default `standard`); subagents and other compositions do not show it, while a normal user fork
+(which merely carries `parentSession`) still counts as the main model.
+
+```yaml
+# Append this one field; a profile patch replaces the whole config block,
+# so keep any existing fields in the same block.
+- id: submodel
+  config:
+    teamFit:
+      enabled: true
+```
+
+> The snippet only shows the new field. If your config already has `executor` / `experts`, keep them in the
+> same `config` block — a profile patch **replaces the whole block** and does not merge field by field.
+
+**Rollback**: set `teamFit.enabled` to `false` and restart the profile — no plugin removal needed; the master
+`enabled: false` also works. When Agent Teams is off or a service query fails, the section hides itself and
+does not affect other prompt sections.
+
 ## Relationship to the official plugins
 
 | Capability | Provided by |
@@ -193,6 +242,7 @@ Fail-fast: startup warnings are logged only and never thrown; errors only surfac
 - Model metadata has no price field, so which routes count as "cheap" is up to your configuration (the wizard
   only pre-fills candidates; it does not decide for you).
 - Non-GUI clients have no question card, so use Option B (manual YAML).
+- The team formation self-check is a **prompt-level constraint**: whether to parallelise and how many teammates to start is still the main model's decision, not enforced; it does not enable Agent Teams for you.
 
 ## Rollback
 
@@ -202,6 +252,9 @@ dsh plugin --profile <your-profile> remove dsh-submodel
 
 Removing the plugin leaves the host authorization row in the profile patch; to revert that too, delete the
 `subagent-model-selection-settings` entry manually.
+
+To turn off only the team formation self-check while keeping everything else, set `teamFit.enabled` to `false`
+and restart the profile (no plugin removal needed).
 
 ## Development and verification
 
@@ -218,13 +271,15 @@ Current verification counts (CI runs the same commands on every push / PR, see `
 
 | Check | Result |
 |---|---|
-| fixture | **104** assertions, `failed: 0` |
+| fixture | **126** assertions, `failed: 0` |
 | Python driver | **7** test cases, `OK` |
-| Public-profile smoke | **7** assertions, `failed: 0` |
+| Public-profile smoke | **8** assertions, `failed: 0` |
 
 GUI end-to-end (the `configure_submodel` card and both writes, `delegate_task` delegation, and switching the
 main model to the execution route to enter economize mode) must be accepted by the user in a restarted real
-GUI session and is **not verified yet**.
+GUI session and is **not verified yet**. For the team formation self-check, the deterministic parts (the three
+leading lines, identity/preset/team-state gating, off-by-default rollback) are covered by the fixture; the
+actual first-turn reply and teammate count in a real GUI conversation still need acceptance in a new session.
 
 ## Contributing
 
