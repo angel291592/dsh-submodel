@@ -1,6 +1,6 @@
 {
   "name": "dsh-submodel",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "官方 subagent 的默认策略包：装上一次配好「什么时候自己干、什么时候派出去、派给谁」。",
   "type": "module",
   "main": "lib/index.js",
