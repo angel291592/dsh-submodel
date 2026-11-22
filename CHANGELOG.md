@@ -44,6 +44,14 @@
 - **未验证**：真实 GUI 首轮对话的实际回复/任务板/队友数（需重启后的新会话验收）；本包在真实宿主上的
   装载（参考实现已在 DSH `0.2.2-rc.5` 桌面会话中出现过自检正文，本移植的宿主 API 契约按官方源码核对）。
 
+### 发布（2026-11-23）
+
+- npm：[dsh-submodel@0.3.0](https://www.npmjs.com/package/dsh-submodel/v/0.3.0)（MIT）
+- GitHub Release：[v0.3.0](https://github.com/angel291592/dsh-submodel/releases/tag/v0.3.0)
+- 流程：`scripts/release.ps1 0.3.0`（门禁 → 版本提交 → tag → push）→ GitHub Actions `release` 工作流
+  （npm Trusted Publishing/OIDC，20 秒内成功）；从 registry 安装实测 `import('dsh-submodel')` 正常、
+  发布包内含 `lib/team-fit.js`。
+
 ## 0.2.0（2026-11-11）
 
 **通用自动配置 + DSH 0.2.2 适配收口。** 模式判定由「模型名后缀」改为「路由」，新增 `configure_submodel`
