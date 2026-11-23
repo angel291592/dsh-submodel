@@ -1,6 +1,12 @@
 # dsh-submodel
 
-**The default policy pack for the official subagent.** Install once and "who does what, when to delegate, and to whom" is configured for you.
+**Two-way cross-model delegation policy for the official subagent.** A strong main model hands routine execution down to a cheaper model; a cheap main model escalates architecture-level problems to a strong one — routine token spend stays cheap, hard problems still get a strong model.
+
+> **What it solves**
+> - **Routine execution and retrieval** stay on a cheap model (e.g. DeepSeek Flash), so expensive models stay out of routine work.
+> - **Architecture and complex code or logic** escalate to a strong expert model (e.g. Claude).
+> - **Both directions**: whichever model is the main one, work goes to the right tier; delegated subagents cannot delegate further.
+> - You configure the provider/model behind each route; the policy text ships with no provider or model names.
 
 ![dsh-submodel: the main model routes work to an executor route or expert routes](https://raw.githubusercontent.com/angel291592/dsh-submodel/main/assets/hero.svg)
 
