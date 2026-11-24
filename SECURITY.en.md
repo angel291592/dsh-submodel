@@ -18,20 +18,9 @@ anyone else can read the details.
 
 ## What this plugin can touch
 
-`dsh-submodel` is a DSH plugin: not a service, no network access, no state file of its own.
-It does exactly three things:
+`dsh-submodel` uses the model catalog and subagent service in DSH. DSH holds model credentials and makes requests. The main model receives your model notes, so use them for task preferences. With automatic switching on, the next authorized model receives the same task. It may use a different provider and incur another charge.
 
-1. reads the provider / model names you already configured in DSH (**it does not read your
-   keys** — they stay with the DSH channel configuration);
-2. renders delegation policy text into the system prompt and registers a `delegate_task`
-   tool, whose parameters and output reuse the native `subagent` definition instead of
-   inventing a second one;
-3. when you call `configure_submodel` in a first session, writes two pieces of configuration
-   through the host's `configEditor` (locked, atomic, rolls back on failure): this plugin's
-   own config row, and the host's "subagent model selection" allow-list.
-
-So it can do no more than your DSH process itself can — but it *does* change your profile
-configuration, and that is the part worth looking at first when judging security impact.
+The settings page saves plugin preferences through the host's settings service. The first-run wizard can also add selected models to the host authorization list after separate consent. Each write checks its own revision and reports its own outcome. Model authorization applies to new conversations. Use Subagent settings to restore prior authorization after removing the plugin.
 
 ## In scope
 
@@ -39,10 +28,9 @@ configuration, and that is the part worth looking at first when judging security
   the host allow-list.
 - **Prompt injection**: a string under someone else's control (a route name, a model name, the
   `texts.*` overrides) escapes where it belongs and makes the main model act unexpectedly.
-- **Configuration writes out of bounds**: `configure_submodel` changes a config entry you were
-  not asked about, or a failed write is reported as a success.
-- **Guard bypass**: with `guardNativeSubagent` enabled, the native `subagent` tool can still be
-  used to sidestep this plugin's delegation policy.
+- **Configuration writes out of bounds**: the page or wizard changes a setting without consent, or reports a failed write as successful.
+- **Automatic retry out of bounds**: starting an unauthorized fallback, retrying with unknown usage, or starting duplicate work for one failure.
+- **Guard bypass**: a child can delegate again through this plugin, or the native-tool guard can be bypassed when enabled.
 
 ## Out of scope
 
@@ -60,8 +48,7 @@ configuration, and that is the part worth looking at first when judging security
 | `main` (current development line) | Yes |
 | Older versions | No — reproduce on the latest version or `main` first |
 
-> 0.2.0 has not been published to npm yet; until it is, `dsh plugin add dsh-submodel` installs
-> 0.1.0.
+See the [compatibility table](README.en.md#compatibility) for host versions and verified environments.
 
 ## What to expect
 

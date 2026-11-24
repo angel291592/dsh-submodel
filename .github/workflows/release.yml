@@ -1,24 +1,25 @@
-# release.yml —— 通过 npm Trusted Publishing（OIDC）自动发布，不在本机/仓库保存任何 npm 令牌。
+# release.yml —— 用同一次检查过的 tarball 走 npm Trusted Publishing（OIDC）发布，不在本机/仓库保存任何 npm 令牌。
 #
 # 触发方式：
-#   1) push `v*` tag：发布该 tag 对应的版本（要求 package.json 版本与 tag 一致）；
-#   2) 手动 workflow_dispatch：在默认分支（main）上发布 package.json 当前版本，
-#      用于首次接入 OIDC 或补发。
+#   1) push 注解 tag `v<版本>`：发布该 tag 对应的版本；
+#   2) 手动 workflow_dispatch：只接受已存在的注解 tag，用于复跑同一 tag，不接受新 tag。
 #
-# 首次接入前置（在 npm 包设置里一次性配置，属敏感操作需过 npm 密码/2FA）：
+# 发布契约（统一版计划 §7.1）：
+#   - 只接受已存在的注解 tag；固定 tag 提交、要求它在 origin/main 上且工作区干净；
+#   - 从 tag 注解读取 pack-content-sha256，按该提交的 Git 原始 blob 重新打包并比对同一内容摘要；
+#   - 私密检查失败、摘要不等、发布目标已被占用都停止；不覆盖旧 tag；
+#   - 发布同一次检查过的 tarball，不打印认证数据；npm 走 OIDC（Trusted Publishing）；
+#   - 发布后从 registry 下载精确版本核对同一内容摘要，并同步 GitHub Release。
+#
+# npm 侧一次性前置（在 npm 包设置里配置，属敏感操作需密码/2FA）：
 #   Provider: GitHub Actions
 #   Organization or user: angel291592
 #   Repository: dsh-submodel
 #   Workflow filename: release.yml
-#   Environment: （留空）
-#   并确认允许 **Direct publish（npm publish）**（2026-09-03 之后新建的配置默认只放行
-#   `npm stage publish`，需要勾选/添加 npm publish）。
+#   Environment:（留空）
+#   并允许 Direct publish（npm publish）。
 #
-#   也可用 npm CLI 完成同一步（需 npm >= 11.15，先 `npm login`）：
-#     npm trust github dsh-submodel --file release.yml \
-#       --repo angel291592/dsh-submodel --allow-publish -y
-#
-# npm 侧要求：npm CLI >= 11.5.1；这里显式安装 npm@11，避免 runner 自带版本过旧。
+# npm 侧要求 npm CLI >= 11.5.1；这里显式安装 npm@11，避免 runner 自带版本过旧。
 name: release
 
 on:
@@ -26,18 +27,94 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag:
+        description: '已存在的注解 tag（例如 v0.4.0；手动复跑只接受同一已存在 tag）'
+        required: true
+        type: string
 
 permissions:
-  contents: read
+  contents: write # 同步 GitHub Release
   id-token: write # OIDC：让 npm 信任「本仓库 + 本工作流」，无需令牌
+
+concurrency:
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
+  cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: 检出代码
+      - name: 检出代码（完整历史与 tags）
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: 校验 tag、固定提交并读取内容摘要
+        id: tag
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_REF_NAME: ${{ github.ref_name }}
+          PUSH_SHA: ${{ github.sha }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "push" ]; then
+            TAG="$PUSH_REF_NAME"
+          else
+            TAG="$INPUT_TAG"
+          fi
+          if ! printf '%s' "$TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "tag 格式非法：$TAG" >&2
+            exit 1
+          fi
+
+          git fetch --tags origin
+          TAG_REF="refs/tags/$TAG"
+          if ! TAG_OBJECT="$(git rev-parse --verify "$TAG_REF^{tag}" 2>/dev/null)"; then
+            echo "需要远端已存在的注解 tag：$TAG" >&2
+            exit 1
+          fi
+          COMMIT="$(git rev-parse --verify "$TAG_OBJECT^{commit}")"
+          if [ "$EVENT_NAME" = "push" ] && [ "$(git rev-parse --verify "$PUSH_SHA^{commit}")" != "$COMMIT" ]; then
+            echo '标签指向的提交与触发本次运行的提交不同' >&2
+            exit 1
+          fi
+          git fetch --force origin '+refs/heads/main:refs/remotes/origin/main'
+          if ! git merge-base --is-ancestor "$COMMIT" refs/remotes/origin/main; then
+            echo "tag 提交不在 origin/main 上，停止发布：$COMMIT" >&2
+            exit 1
+          fi
+          git checkout --detach "$COMMIT"
+          if [ -n "$(git status --porcelain)" ]; then
+            echo '检出 tag 提交后工作区不干净' >&2
+            exit 1
+          fi
+
+          VERSION="${TAG#v}"
+          MANIFEST_VERSION="$(node -p "require('./package.json').version")"
+          if [ "$VERSION" != "$MANIFEST_VERSION" ]; then
+            echo "package.json 版本 $MANIFEST_VERSION 与 tag $TAG 不一致" >&2
+            exit 1
+          fi
+
+          ANNOTATION="$(git cat-file tag "$TAG_OBJECT" | sed '1,/^$/d')"
+          COUNT="$(printf '%s\n' "$ANNOTATION" | grep -cE '^pack-content-sha256:[0-9a-f]{64}$' || true)"
+          CONTENT_SHA="$(printf '%s\n' "$ANNOTATION" | sed -n 's/^pack-content-sha256:\([0-9a-f]\{64\}\)$/\1/p' | head -n 1)"
+          if [ "$COUNT" != "1" ] || [ -z "$CONTENT_SHA" ]; then
+            echo 'tag 注解必须恰好包含一行 pack-content-sha256:<64 位十六进制摘要>' >&2
+            exit 1
+          fi
+
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "commit=$COMMIT"
+            echo "content_sha=$CONTENT_SHA"
+          } >> "$GITHUB_OUTPUT"
+          echo "已固定 tag $TAG 到提交 $COMMIT"
+          echo "pack-content-sha256=$CONTENT_SHA"
 
       - name: 设置 Node
         uses: actions/setup-node@v7
@@ -53,27 +130,151 @@ jobs:
       - name: 安装支持 Trusted Publishing 的 npm
         run: npm install -g npm@11
 
-      - name: 版本与 tag 一致性校验（tag 触发时）
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: |
-          node -e "const v=require('./package.json').version; if ('v'+v !== process.env.GITHUB_REF_NAME) { console.error('package.json version '+v+' != tag '+process.env.GITHUB_REF_NAME); process.exit(1); }"
-
       - name: 安装依赖
         run: npm install --no-audit --no-fund
 
-      - name: 自动化门禁
+      - name: 私密检查（已固定提交的树；只列类别不打印敏感值）
         run: |
+          set -euo pipefail
+          FORBIDDEN='^(reference/|docs/plans/|tests/_scratch/|node_modules/|__pycache__/|\.env|.*\.bak-|HANDOFF\.md)'
+          HITS="$(git ls-files | grep -E "$FORBIDDEN" || true)"
+          if [ -n "$HITS" ]; then
+            echo '私密检查失败：提交树含私有/本机路径' >&2
+            printf '%s\n' "$HITS" \
+              | grep -oE '(reference|docs/plans|tests/_scratch|node_modules|__pycache__)/|\.env[^/]*|\.bak-[^/]*|HANDOFF\.md' \
+              | sort -u \
+              | sed 's/^/  - 类别：/' >&2
+            exit 1
+          fi
+          echo '私密检查通过：未发现私有/本机路径'
+
+      - name: 自动化门禁（不可跳过）
+        run: |
+          set -euo pipefail
           node tests/unit/flash-routing-fixture.mjs ./lib
           node tests/unit/public-profile-smoke.mjs
           python -m unittest discover -s tests/unit -v
 
-      - name: 发布到 npm（OIDC 可信发布，无令牌）
-        # setup-node v4 会往 .npmrc 写入 ${NODE_AUTH_TOKEN} 并填一个占位值，
-        # npm 11 一旦看到可用令牌就不再走 OIDC，结果是 404。v7 已经不再导出这个占位值，
-        # 但这一步仍然保留：它保证「发布只依赖 OIDC」，而不是依赖某个 action 版本的具体行为。
+      - name: 按 tag 提交的 Git 原始 blob 重新打包并比对注解摘要
+        id: package
+        env:
+          COMMIT: ${{ steps.tag.outputs.commit }}
+          CONTENT_SHA: ${{ steps.tag.outputs.content_sha }}
         run: |
-          if [ -n "$NPM_CONFIG_USERCONFIG" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
+          set -euo pipefail
+          PKG_DIR="$RUNNER_TEMP/pkg-src"
+          DIST_DIR="$RUNNER_TEMP/dist"
+          mkdir -p "$DIST_DIR"
+          node scripts/verify-package.mjs --materialize "$PKG_DIR" --rev "$COMMIT"
+
+          ( cd "$PKG_DIR" && npm pack --ignore-scripts --dry-run --json > "$RUNNER_TEMP/dry-run.json" )
+          node -e '
+            const fs = require("fs");
+            const data = JSON.parse(fs.readFileSync(process.env.RUNNER_TEMP + "/dry-run.json", "utf8"));
+            if (!data[0] || !Array.isArray(data[0].files) || data[0].files.length !== 16) {
+              console.error("npm pack --dry-run 文件数不是 16");
+              process.exit(1);
+            }
+          '
+
+          ( cd "$PKG_DIR" && npm pack --ignore-scripts --json --pack-destination "$DIST_DIR" > "$RUNNER_TEMP/pack.json" )
+          TGZ_COUNT="$(ls -1 "$DIST_DIR"/*.tgz 2>/dev/null | wc -l)"
+          if [ "$TGZ_COUNT" != "1" ]; then
+            echo "npm pack 应恰好产出一个 tarball，实际 $TGZ_COUNT 个" >&2
+            exit 1
+          fi
+          TGZ="$(ls -1 "$DIST_DIR"/*.tgz | head -n 1)"
+
+          node scripts/verify-package.mjs "$TGZ" --expect-content-sha256 "$CONTENT_SHA"
+          sha256sum "$TGZ"
+          echo "tgz=$TGZ" >> "$GITHUB_OUTPUT"
+
+      - name: 检查发布目标是否已被占用
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          STATUS="$(curl --silent --show-error --connect-timeout 10 --max-time 30 \
+            --output /dev/null --write-out '%{http_code}' "https://registry.npmjs.org/dsh-submodel/$VERSION")"
+          case "$STATUS" in
+            404) echo "发布目标 dsh-submodel@$VERSION 尚未发布" ;;
+            200) echo "发布目标已占用：dsh-submodel@$VERSION" >&2; exit 1 ;;
+            *) echo "无法确认发布目标是否可用，HTTP $STATUS" >&2; exit 1 ;;
+          esac
+
+      - name: 发布同一 tarball 到 npm（OIDC 可信发布，无令牌）
+        env:
+          TGZ: ${{ steps.package.outputs.tgz }}
+        run: |
+          set -euo pipefail
+          # setup-node 会写入带占位令牌的 .npmrc；这里保证「发布只依赖 OIDC」。
+          if [ -n "${NPM_CONFIG_USERCONFIG:-}" ] && [ -f "$NPM_CONFIG_USERCONFIG" ]; then
             printf 'registry=https://registry.npmjs.org/\n' > "$NPM_CONFIG_USERCONFIG"
           fi
           unset NODE_AUTH_TOKEN
-          npm publish --access public --provenance --loglevel verbose
+          test -f "$TGZ"
+          npm publish "$TGZ" --ignore-scripts --access public --provenance
+
+      - name: 从 registry 复核同一内容摘要
+        env:
+          VERSION: ${{ steps.tag.outputs.version }}
+          CONTENT_SHA: ${{ steps.tag.outputs.content_sha }}
+        run: |
+          set -euo pipefail
+          REG_DIR="$RUNNER_TEMP/registry"
+          mkdir -p "$REG_DIR"
+          for attempt in $(seq 1 10); do
+            rm -f "$REG_DIR"/*.tgz 2>/dev/null || true
+            if npm pack "dsh-submodel@$VERSION" --ignore-scripts --pack-destination "$REG_DIR" >/dev/null 2>&1; then
+              REG_TGZ="$(ls -1 "$REG_DIR"/*.tgz 2>/dev/null | head -n 1)"
+              if [ -z "$REG_TGZ" ]; then
+                echo 'registry 下载没有生成包文件' >&2
+                exit 1
+              fi
+              node scripts/verify-package.mjs "$REG_TGZ" --expect-content-sha256 "$CONTENT_SHA"
+              echo "registry 上的 dsh-submodel@$VERSION 与 tag 注解内容摘要一致"
+              exit 0
+            fi
+            echo "registry 尚未可取到同一内容（第 $attempt/10 次），稍后重试…"
+            sleep 15
+          done
+          echo '超时：registry 上的版本内容摘要与 tag 注解不一致或不可取，停止' >&2
+          exit 1
+
+      - name: 同步 GitHub Release（同一 tag 与内容摘要）
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          VERSION: ${{ steps.tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/changelog-section.mjs" <<'NODE'
+          import fs from 'node:fs';
+          const [version, outPath] = process.argv.slice(2);
+          const lines = fs.readFileSync('CHANGELOG.md', 'utf8').split(/\r?\n/);
+          const escaped = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const matcher = new RegExp('^##\\s+' + escaped + '(?![0-9A-Za-z.-])');
+          const start = lines.findIndex((line) => matcher.test(line));
+          if (start < 0) {
+            console.error('CHANGELOG.md 缺少 ' + version + ' 段');
+            process.exit(1);
+          }
+          let end = lines.length;
+          for (let i = start + 1; i < lines.length; i += 1) {
+            if (/^##\s/.test(lines[i])) { end = i; break; }
+          }
+          const body = lines.slice(start + 1, end).join('\n').trim();
+          if (!body) {
+            console.error('CHANGELOG.md 的 ' + version + ' 段为空');
+            process.exit(1);
+          }
+          fs.writeFileSync(outPath, body + '\n');
+          NODE
+          node "$RUNNER_TEMP/changelog-section.mjs" "$VERSION" "$RUNNER_TEMP/release-notes.md"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md"
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" --verify-tag
+          fi
+          echo "已同步 GitHub Release $TAG"

@@ -13,16 +13,11 @@
 [![npm version](https://img.shields.io/npm/v/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![npm downloads](https://img.shields.io/npm/dm/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![license](https://img.shields.io/npm/l/dsh-submodel.svg)](https://github.com/angel291592/dsh-submodel/blob/main/LICENSE)
-[![DSH](https://img.shields.io/badge/DeepSeek%20Harness-%E2%89%A50.2.2-4d6bfe.svg)](https://github.com/angel291592/dsh-submodel)
-[![dshbase](https://img.shields.io/badge/dshbase-install--tested-2ea44f.svg)](https://github.com/ylwl1997/dshbase/issues/221)
+[![DSH >=0.2.2-rc.5](https://img.shields.io/badge/DSH-0.2.2--rc.5%20%E8%B5%B7-4d6bfe.svg)](https://github.com/angel291592/dsh-submodel)
 
 **中文** | [English](README.en.md)
 
-它**不新建 provider 体系**——只读你 profile 里已有的渠道与模型配置，把委派策略写进系统提示词，
-并给官方 `subagent` 补一个统一的委派入口 `delegate_task`。0.2.0 起模式按**路由**判定（不再依赖
-模型命名约定），并提供首次配置向导与 `economyRoutes`；0.3.0 起可**可选**开启「团队队形自检」：
-同时启用官方 Agent Teams 后，顶层主代理在首轮实际任务前先声明是否并行、开几个队友、每个用什么模型
-（默认关闭）。要求 DSH `0.2.2-rc.1`（`0.2.1` 及更早不兼容）。
+在 **插件 → 派活模型设置** 中给性价比模型和专家模型分别排序，也可以给每个模型写一句用途备注。主模型可以按任务选择起点；启用自动换模型后，符合条件的失败会从所选位置往下尝试。DSH 管理模型渠道、凭据和子代理选模权限。`0.4.0` 要求 DSH `>=0.2.2-rc.5 <0.3.0`。
 
 ## 安装
 
@@ -34,19 +29,18 @@ dsh --profile <你的 profile>                            # 2. 启动（装完�
 
 ## 配置（两步）
 
-配置分**两层**，缺一层都派不出去：
+切换子代理模型时，既要选择派活偏好，也要在 DSH 里允许相应模型：
 
 | 层 | 管什么 | 缺失的后果 |
 |---|---|---|
-| ① 宿主授权 | DSH 自己的「子代理模型选择」设置：允许子代理切到哪些路由 | 子代理要切到非继承路由时，派工报 `child LLM route "…/…" is not allowed for this Session` |
-| ② 插件配置 | 本包的 `executor`（执行路由）与 `experts`（专家路由） | 强主脑模式下没有默认派工目标，只记 error 日志、不派工 |
+| ① 宿主授权 | 允许新会话把工作派给哪些模型 | 当前会话不能派给未授权的其他模型 |
+| ② 插件配置 | 选择默认执行模型和可用的专家模型 | 没有默认执行模型时，强主脑无法自动选定日常委派目标 |
 
 ### ① 宿主授权（必须）
 
 DSH 原生 `subagent` 默认只允许子代理沿用父会话的路由；要让子代理切到执行/专家路由，先做宿主授权：
 
-- **GUI**：打开「设置」里的 **子代理模型选择**（配置项 id 为 `subagent-model-selection-settings`），
-  打开开关，并把执行路由、专家路由**逐条**加入允许列表。
+- **界面**：在「插件」中打开 **子代理** 的设置，启用模型选择，并将执行、专家和备选模型逐一加入允许列表。
 - **或手写 profile 补丁 YAML**（`~/.dsh/profiles/<你的 profile>/cordis.patch.yml`；该文件默认是空数组
   `[]`，把下面的条目追加进数组即可）：
 
@@ -59,37 +53,29 @@ DSH 原生 `subagent` 默认只允许子代理沿用父会话的路由；要让�
         model: your-model
       - provider: your-provider
         model: your-strong-model
+      - provider: your-other-provider
+        model: your-backup-model
 ```
 
 注意：`enabled: true` 时 `allowedModels` 不能为空；宿主授权**只对新会话生效**，写完要新开会话（或重启 profile）。
 
-### ② 插件配置（二选一）
+### ② 插件配置
 
-**方式 A（推荐）：首次会话调用 `configure_submodel` 自动写两处**
+**设置页**：在 **插件 → 派活模型设置** 打开详情。两组都可添加模型、调整顺序并写用途备注，例如「代码优先」。每组第一位是通常的起点，主模型也可根据备注选其他项。要用到的模型请在「子代理」设置单独授权。另一页先保存时，本页会保留草稿；读取最新设置并核对后再保存。连接更换后请重新载入页面。
 
-不用手写 YAML。只要满足：顶层主代理 + `autoConfigure` 保持默认 `true` + `executor` 还没配置，
-首次会话里就会出现 `configure_submodel` 工具：
+**首次配置向导**：顶层主代理尚未设置执行模型且 `autoConfigure` 开启时，可调用 `configure_submodel`。向导先询问执行与专家模型，再单独询问是否同时添加子代理模型授权。两处设置分别保存并报告结果；其中一处失败时，按向导提示复查。保存执行模型后，向导入口随即隐藏。
 
-1. 调用它，会依次问 3 个问题——**执行路由**（日常可验证的执行块派给谁，单选）、
-   **专家路由**（需要升级时允许点名的模型，可多选）、**是否同时写宿主授权表**（推荐「是」）；
-2. 确认后它用官方 `configEditor` **先写宿主授权、再写插件配置**（插件配置里的 `executor`、`experts`
-   与 `economyRoutes` 都按你的选择落盘），两处一起生效；
-3. 新会话生效。写入成功后本插件会重载、该工具随之消失——这是预期的，不是出错。
-
-没有 GUI 客户端（headless / 纯 CLI）或相关服务不可用时，它不会弹卡，而是直接返回可复制的手动
-YAML，并且**不会写任何配置**。
-
-**方式 B：手动写 5 行 YAML**
-
-在 profile 补丁层（`~/.dsh/profiles/<你的 profile>/cordis.patch.yml`）里按 id 覆盖配置。
-该文件默认是空数组 `[]`：**把 `[]` 替换成下面的条目**；已有其他条目时，把它追加到数组里。
+**无设置页时**：在 profile 补丁中添加或更新如下 `submodel` 条目。已有字段一并保留。没有可回答提问卡的客户端时，向导会说明手动配置的两步。
 
 ```yaml
 - id: submodel
   config:
-    executor:
-      provider: your-provider
-      model: your-model
+    modelGroups:
+      executors:
+        - { provider: your-provider, model: your-model, note: 代码优先 }
+        - { provider: your-other-provider, model: your-backup-model }
+      experts:
+        - { provider: your-provider, model: your-strong-model, note: 架构判断 }
 ```
 
 注意：profile 补丁对某一条目的 `config` 是**整段替换**——没写的字段回落到默认值（见下表），
@@ -103,20 +89,33 @@ YAML，并且**不会写任何配置**。
 | `autoConfigure` | `true` | 是否在首次配置时注册 `configure_submodel` 向导（顶层主代理且 `executor` 未配置才可见）；关掉后完全手动配置 |
 | `preset` | `standard` | 只对这个 composition 生效 |
 | `teamFit.enabled` | `false` | 团队队形自检段开关（0.3.0+）：需总开关 `enabled` 同时为 `true`、并启用官方 Agent Teams；只对目标 preset 的顶层主代理显示，详见下文。默认关闭 = 回滚态 |
-| `executor.provider` / `executor.model` | 空 | 执行路由：强主脑的默认派工目标；**留空会记 error 日志**（见故障排查）。主模型切到这条路由本身也等于进入 Flash 模式 |
-| `executor.reasoningEffort` | `max` | 只在调用方没显式指定档位时作缺省 |
+| `modelGroups` | `legacy`（沿用旧配置） | `executors` 与 `experts` 是两组有序列表，每项 `{provider, model, note?, reasoningEffort?}`。组内不能重复；每个模型都可设默认推理强度：委派未点名档位或自动改派落到该模型时使用，留空交给模型，调用点名的档位优先 |
+| `executor`、`experts` | 未配置 | 仅在未保存两组列表时使用。旧执行模型省略 `reasoningEffort` 时沿用 `max`，设为 `""` 时用模型默认 |
 | `economyRoutes` | `[]` | 额外声明「便宜路由」，每项 `{provider?, model}`：本次请求命中任一项即算 Flash（economize）模式。`provider` 省略时只按 `model` 匹配；**非空时旧的 flash 后缀规则不再生效** |
-| `experts` | `[]` | 允许升级时显式点名的专家路由列表，每项 `{label, provider, model, reasoningEffort?}`；`reasoningEffort` 目前为预留字段，不影响派工 |
 | `texts.economize` / `texts.boss` / `texts.child` | 空 | 非空时整段替换内置正文（替换后不再插值） |
 | `toolName` | `list_subagent_models` | 策略段的能力门控工具名 |
 | `order` | `2850` | 策略段在系统提示词里的顺序 |
-| `guardNativeSubagent` | `true` | 是否拦截"非经济路由（非 Flash 模式）顶层用原生 `subagent` 却不给完整 provider/model" |
+| `guardNativeSubagent` | `true` | 强主脑直接用原生 `subagent` 时要求完整的渠道与模型 |
+| `fallbacks` | `[]` | 仅旧配置使用。每项 `{primary: {provider, model}, alternatives: [...]}`；首次保存组列表后改用组内顺序 |
+| `watchdog.mode` | `off` | `off` 关闭，`notify` 提醒收尾，`stop` 宽限后提示手动停止，`retry` 在符合条件时改派 |
+| `watchdog.tiers` | `[expert]` | 选择 `expert`（专家）和／或 `executor`（执行） |
+| `watchdog.warnTokens` | `100000` | 已报告的累计 token 阈值（正整数） |
+| `watchdog.graceMs` | `60000` | 成功发出收尾提醒后等待的时间，范围 `1000`–`600000` 毫秒 |
+| `watchdog.maxRetries` | `1` | 每笔任务最多自动改派 `0`–`2` 次 |
+
+## 用量提醒与自动换模型
+
+**用量提醒**默认关闭，只观察经 `delegate_task` 启动的、属于选定组的本机子任务。用量按模型报告值累计，单次请求可能超过提醒值。宿主把漏报和明确报零都记成零，所以两者都按未知处理。「提醒后再等」在页面用秒表示，时间到后只提示你手动停止，不会代你停止任务。
+
+**失败后尝试下一位模型**开启后，只有原模型耗尽宿主的有限重试（默认首次失败后再试 5 次，实际少于 5 次则不换），整个任务用量已知且低于提醒值，并且没有部分结果、工具调用、人工停止或续聊，才会尝试同一组的下一位。从选中的位置往后，不回头、不跳过不可用或未授权项。切换后的模型使用它自己配置的默认档位（未配置则由模型决定），不继承原模型的档位。当前设置与会话记录都须允许下一位。它可以来自其他渠道，该渠道会收到任务，也可能收取费用。关闭用量提醒会撤销等待中的动作，已经被宿主受理的子任务照常收尾。
+
+整组累计用量要求每次请求都提供可核实的样本。某次漏报或报零时，即使稍后请求报告了用量，自动换模型也会停止。已有配置在保存两组模型前保持原行为。保存组列表后请把希望保留的旧备选添加到对应组。一个渠道与模型的组合若同时在两组，显式点名按专家组处理。
 
 ## 它怎么判断该谁干（0.2.0 起按路由）
 
 两种模式，判定只看**本次请求的路由**（`provider` + `model`），不再要求模型名带特定后缀：
 
-1. 本次请求路由 **== 配置的 `executor` 路由** → **Flash（`economize`）模式**；
+1. 本次请求的模型命中「性价比模型」组（旧配置下匹配 `executor`）→ **Flash（`economize`）模式**；
 2. 命中配置的 **`economyRoutes`** 任一条 → **Flash（`economize`）模式**（有多条便宜路由时用）；
 3. `economyRoutes` 为空时保留旧版兼容：模型名以 `flash` 结尾 → **Flash（`economize`）模式**；
 4. 其余 → **强主脑（`boss`）模式**。
@@ -124,15 +123,15 @@ YAML，并且**不会写任何配置**。
 内置正文与行为：
 
 - **Flash 模式**：默认自己干；普通子任务用 `delegate_task`（不传 provider/model，子代继承当前路由）；
-  只有"问题本身够复杂"或"超出执行上限"时才升级，升级时从 `experts` 里点名。
-- **强主脑模式**：理解/判断/写作自己来；可验证的执行块默认派给 `executor` 配置的执行路由。
+  只有问题足够复杂或超出执行上限时才升级，按专家组顺序和用途备注点名。
+- **强主脑模式**：理解、判断和写作自己来。可验证的执行块默认派给性价比组首位，也可以按用途备注点名其他模型。
 - **子代**：硬边界——`delegate_task` / `subagent` / `subagent_fork` / `workflow` / `spawn_teammate`
   一律不可用，防止递归派活。
 - **`delegate_task`**：参数与原生 `subagent` 相同（`description`、`prompt`，以及可选的
   `provider` / `model` / `reasoning_effort`；`provider` 与 `model` 必须**成对**传，只给一个会立即失败）。
+  调用未点名 `reasoning_effort` 时，用该模型在两组列表里配置的默认档位（未配置则由模型决定）。
   经 `ctx.tools.execute` 发起真正的原生调用，宿主的 allowlist / 预检 / 权限照旧生效。
-  0.2.0 起语义为「启动后**立即返回子会话 id**，完成时由运行时通知」：不要反复轮询，需要查看在线
-  子代理用 `list_agents`、追加消息用 `send_message`、停止用 `interrupt_agent`。
+  启动成功时原样返回 `{kind: 'activation', name}`。`name` 可用于查看或发信。结果由宿主在子任务结束后通知。
   不确定有哪些已授权路由时先调 `list_subagent_models`。
 
 两个典型用法：
@@ -188,42 +187,35 @@ YAML，并且**不会写任何配置**。
 
 | 能力 | 提供方 |
 |---|---|
-| 状态查看 `list_agents`、追加消息 `send_message`、停止 `interrupt_agent` | 官方 `@deepseek-ai/dsh-tool-subagent-control`（本包**不重复注册**） |
-| 策略正文、`delegate_task`、子代 guard、`configure_submodel` 向导 | 本包 |
-| 模型选择能力本身（`subagent` 的 `provider`/`model` 参数） | 官方 subagent（本包只消费） |
+| 查看、发信、等待、停止 | 宿主提供 `list_agents`、`send_message`、`wait_agent` 和可选的 `interrupt_agent` |
+| 派活规则、`delegate_task`、设置页面和向导、用量看护 | 本包 |
+| 选模授权与任务板 | 宿主管理，任务板由 Agent Teams 开关控制 |
+
+`list_agents` 返回整棵子代理树。`send_message` 确认投递，任务结果会另行送达。`wait_agent` 等待收件箱输入或完成通知，正常超时后可继续处理别的工作。`interrupt_agent` 在标准预设默认关闭，可按宿主指南启用；也可以在「子代理」面板停止任务。中断被受理后，以任务结束记录为准。
 
 ## 兼容性
 
-| DSH 版本 | 状态 |
+| DSH 版本 | 验证状态 |
 |---|---|
-| `0.2.2-rc.1` | ✅ 目标版本：fixture + 隔离 profile **真机装载已验**；GUI 端到端由用户验收（**未验证**） |
-| `0.2.1-rc.5` 及更早 | ❌ 不兼容：没有批量 `ctx.tools.execute`，也没有 0.2.2 的子代理路由语义 |
-| 其他 `0.2.x` 版本 | 未逐版实测；`engines.dsh` 声明 `>=0.2.2-rc.1 <0.3.0`，范围外的版本会被安装器拦住 |
+| `0.2.2-rc.5` | 安装版命令行开启隔离 Web 已验证设置页、派活和控制工具。桌面试装、npm 下载版命令行待验收 |
+| `0.2.2-rc.1`–`rc.4` | 使用对应宿主版本时可安装 `dsh-submodel@0.3.0`，或升级 DSH |
+| `>=0.2.2-rc.5 <0.3.0` 内其他版本 | 声明兼容范围内，待逐版验证 |
 
 ## 故障排查
 
-fail-fast：启动期的告警只记日志、绝不抛；只有你主动调用工具时才可能收到错误。
-
-| 现象 | 级别 | 含义与处理 |
-|---|---|---|
-| `config.executor.provider/model 未配置，自动委派不可用…` | `error` | 没有默认派工目标：调用 `configure_submodel` 自动配置，或按上面「两步配置」手动补 `executor` |
-| `child LLM route "…/…" is not allowed for this Session` | 派工时报错 | **宿主授权缺失**（或没包含这条路由）：打开「子代理模型选择」并把该路由加入允许列表（新会话生效）；或重新运行 `configure_submodel` 并勾选写宿主授权 |
-| 看不到 `configure_submodel` | — | ① `executor` 已配置（向导按设计只出现一次）；② `autoConfigure` 被设为 `false`；③ 当前会话的原生 `subagent` 没有选模参数（先确认 profile/preset 开启了模型选择）；④ 当前不是顶层主代理 |
-| 调用 `configure_submodel` 后没有弹提问卡 | — | 当前客户端没有 GUI（headless / 纯 CLI），没人可问；工具会返回手动 YAML 且不写配置，按「方式 B」手写即可 |
-| `当前 profile 无 agentPresets 服务，策略不生效` | `warn` | 该 profile 没有 agentPresets 服务；换一个支持 composition 的 profile |
-| `原生 subagent 未暴露 provider/model，delegate_task 不安装` | `warn` | 本会话的原生 `subagent` 没有选模参数：该 agent 上**整套安装**（策略段 / guard / 工具）都会跳过，等能力出现后由 `tools/change` 或 `agent/pre-step` 自动补装 |
-| `本会话未启用官方 subagent 模型选择，策略段不渲染` | `info` | 去设置里启用 `subagent-model-selection-settings`（宿主授权只对新会话生效）；工具本身仍按注册门控安装 |
+| 现象 | 处理方法 |
+|---|---|
+| 没有可用的派活执行目标 | 到插件详情选择执行模型，或使用首次配置向导 |
+| 当前会话无权使用所选模型 | 在「子代理」设置允许该模型，再新开会话 |
+| 模型列表加载失败 | 在设置页点「重试加载模型」。已保存但暂时不可用的选择可以保留或删除 |
+| 看不到向导 | 向导只在目标预设的顶层主代理、执行模型未配置且原生选模工具可用时出现 |
+| 没有可用的设置页或提问卡 | 按「配置（两步）」通过 profile 补丁设置 |
 
 ## 已知限制
 
-- 策略正文默认中文；可用 `texts.*` 整段覆盖（工具描述与部分 guard 拒绝理由仍为英文）。
-- 只对 `preset` 指定的 composition 生效（默认 `standard`）。
-- 不提供预算护栏 / 催收 / 故障改派（watchdog）。
-- `configure_submodel` 只写两处：本插件配置行 + 宿主授权行（`subagent-model-selection-settings`）；
-  不创建渠道/密钥，也不改其他插件。
-- 模型元数据里没有价格字段，哪些路由算"便宜"由你的配置决定（向导只做候选预填，不替你拍板）。
-- 非 GUI 客户端没有提问卡可用，只能用「方式 B」手动 YAML。
-- 团队队形自检只做**提示词约束**：是否并行、开几个队友仍由主代理判断，不强制；它也不会替你开启 Agent Teams。
+- 策略范围由 `preset` 指定。已有在线代理沿用装载时的派活偏好，新装载会读取保存值。宿主选模授权以会话记录为准，只影响新会话。
+- `texts.*` 可保留自定义提示。升级前请核对其中使用的旧控制工具名。
+- 队形自检为模型提供提示，模型决定是否执行和开多少队友。
 
 ## 回滚
 
@@ -231,7 +223,7 @@ fail-fast：启动期的告警只记日志、绝不抛；只有你主动调用�
 dsh plugin --profile <你的 profile> remove dsh-submodel
 ```
 
-插件移除后，宿主授权行仍在 profile 补丁里；如需一并撤销，手动删除 `subagent-model-selection-settings` 条目即可。
+插件停用或移除后，宿主的授权不会自动撤销。需要回退时，在「子代理」设置恢复原来的授权列表。若同时更换了旧插件，先停用新插件，再恢复备份的旧入口和 profile 配置，重启并开新会话确认只剩一个派活策略。
 
 只关团队队形自检、保留其他功能：把 `teamFit.enabled` 设为 `false` 并重启 profile（不必卸载插件）。
 
@@ -250,14 +242,11 @@ node tests/unit/public-profile-smoke.mjs        # 干净用户配置的确定性
 
 | 检查 | 结果 |
 |---|---|
-| fixture | **126** 条断言，`failed: 0` |
+| fixture | **141** 条断言，`failed: 0` |
 | Python 驱动 | **7** 个用例 `OK` |
 | 公共 profile 冒烟 | **8** 条断言，`failed: 0` |
 
-GUI 端到端（`configure_submodel` 弹卡与两处写入、`delegate_task` 派工、主模型切到执行路由后进入
-economize 模式）需要在重启后的真实 GUI 会话里由用户验收，**尚未验证**。团队队形自检的确定性部分
-（三行正文、身份/预设/团队状态门控、默认关闭与回滚）已由 fixture 覆盖；真实 GUI 首轮对话里的
-实际回复与队友数同样需要在新会话里验收。
+隔离 Web 验证使用本地模拟模型，覆盖保存与重开、冲突草稿、目录恢复、连接更换、亮暗主题和键盘操作；也检查了官方控制工具和用量看护。真实 Desktop 配置与付费模型的组合未由这些检查验证。队形自检约束的是提示词，不保证模型逐字复述。
 
 ## 参与贡献
 
@@ -268,13 +257,25 @@ economize 模式）需要在重启后的真实 GUI 会话里由用户验收，**
 
 ## 发版（维护者）
 
+### 统一维护与同步发布
+
+本仓库是插件的唯一维护入口。功能、修复和打包文档都在这里更新。本机可以在隔离的 DSH
+配置环境中先试装候选包。每次插件更新验证通过后，维护者必须同步发布对应的开源版本，补齐
+变更记录、Git 标签和 npm 发布包。本机日常使用同一个经过验证的发布版本。
+
+渠道、模型选择、预算参数和密钥由用户保存在自己的 DSH 配置或凭据存储。公开示例使用占位值。
+推送前核对待发布提交、`npm pack --dry-run` 的文件清单和实际入包内容。将真实渠道与模型映射、
+本机路径、配置备份、凭据和运行记录排除在 Git 和发布包之外。`reference/` 里的本机参考资料和
+`docs/plans/` 里的私有计划留在本机。单独调整个人配置无需为插件发版。
+
+### 发布步骤
+
 发布走 GitHub Actions + npm **Trusted Publishing（OIDC）**，本机与仓库都不保存 npm 令牌：
 
-1. 在 `CHANGELOG.md` 顶部补 `## <版本>（YYYY-MM-DD）` 段；
-2. 在 `main` 分支运行 `pwsh scripts/release.ps1 <版本>`：跑门禁 → 改 `package.json` 版本 →
-   提交 → 打 tag → push，并轮询 npm 直到看到新版本；
-3. 仓库的 `release` 工作流（`.github/workflows/release.yml`）在 tag push 后再次跑测试并自动
-   `npm publish`；`scripts/release.ps1` 验证成功后会尽量创建 GitHub Release。
+1. 审阅 `package.json` 的版本和 [CHANGELOG.md](CHANGELOG.md) 的对应条目。运行 `pwsh scripts/release.ps1 <版本> -FromIndex`，从暂存内容生成**仅本地**的候选包。脚本不改版本、不提交、不打标签。
+2. 核对包文件清单、`tarball-sha256`（整个压缩包）和 `pack-content-sha256`（每个文件的内容），在隔离环境和有回退准备的桌面环境试装同一候选包。
+3. 获准发布后，在干净的 `main` 上准备已审阅的提交，运行 `pwsh scripts/release.ps1 <版本> -ExpectedContentSha256 <包内容摘要> -Publish`。脚本核对候选包后，推送已审阅的提交和包含摘要的注解标签。
+4. [发布工作流](.github/workflows/release.yml) 从该提交重打包，检查同一内容摘要，再发布检查过的文件。随后从 npm 下载精确版本复核，并同步 GitHub Release。
 
 首次接入需在 npm 包设置里一次性配置 Trusted Publisher（仓库 `angel291592/dsh-submodel`、
 工作流 `release.yml`，并允许 Direct publish），之后发版不再需要 npm 密码 / 动态码 / 令牌。

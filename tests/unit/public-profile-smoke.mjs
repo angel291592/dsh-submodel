@@ -39,6 +39,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function makeHost({ nativeDefinition, modelSelectionVisible = true, presetService, candidates = [] }) {
   const logs = { info: [], warn: [], error: [] };
   const registered = [];
+  const admission = new Map();
   const sections = [];
   const guards = [];
   const listeners = [];
@@ -49,8 +50,9 @@ function makeHost({ nativeDefinition, modelSelectionVisible = true, presetServic
       if (name === 'list_subagent_models') return modelSelectionVisible ? {} : undefined;
       return undefined;
     },
-    register: (definition) => {
+    register: (definition, options) => {
       registered.push(definition.name);
+      admission.set(definition.name, options?.when);
       return () => {};
     },
     guard: (guard) => {
@@ -87,7 +89,7 @@ function makeHost({ nativeDefinition, modelSelectionVisible = true, presetServic
       },
     };
   }
-  return { fakeCtx, logs, registered, guards, listeners, assemblyListeners, sections };
+  return { fakeCtx, logs, registered, admission, guards, listeners, assemblyListeners, sections };
 }
 
 /** 干净的顶层 agent（durable header 判 root；requestHeader 只供执行期读 config）。 */
@@ -201,13 +203,13 @@ await check('干净配置: 通用路由正常安装，正文含配置的执行�
   assert(host.guards.length >= 1, '必须注册子代 guard');
   assertEqual(host.assemblyListeners.length, 1);
   const assembly = Object.freeze({
-    variables: Object.freeze({ model: 'gpt-6.1-sol' }),
+    variables: Object.freeze({ model: 'example-main' }),
     sections: Object.freeze([Object.freeze({ name: 'tool:model-routing', text: '' })]),
   });
   const resolved = await host.assemblyListeners[0](assembly, { agent: candidate, scope: candidate }, async () => assembly);
   const text = resolved.sections[0].text;
   assert(text.includes('provider: "deepseek-official", model: "deepseek-flash"'), `正文必须注入配置的执行路由；实际: ${text.slice(0, 300)}`);
-  for (const leaked of ['p-opus', 'p-gpt', 'm-opus', 'opencode-go', 'deepseek-account']) {
+  for (const leaked of ['fixture-expert', 'fixture-main', 'fixture-fallback', 'fixture-executor', 'fixture-account']) {
     assert(!text.includes(leaked), `干净配置的正文不得出现本机路由名 ${leaked}`);
   }
   assertEqual(resolved.sections[0].interpolate, false, '策略段必须关闭插值');
@@ -231,7 +233,7 @@ await check('干净配置: executor 未配置 + 原生 subagent 可见 → 注�
 });
 
 // ── ⑦ 自动配置向导：executor 已配置时不再注册 ────────────────────────────────
-await check('干净配置: executor 已配置 → 不注册 configure_submodel', async () => {
+await check('干净配置: executor 已配置 → configure_submodel 本步不可用', async () => {
   const candidate = rootCandidate();
   const host = makeHost({
     nativeDefinition: nativeWithRoute(),
@@ -241,8 +243,8 @@ await check('干净配置: executor 已配置 → 不注册 configure_submodel',
   entry.apply(host.fakeCtx, entry.Config({ enabled: true, executor: CLEAN_EXECUTOR }));
   await sleep(50);
   assert(
-    !host.registered.includes('configure_submodel'),
-    `executor 已配置时不得再注册自动配置向导；实际注册: ${host.registered.join(',') || '空'}`,
+    host.admission.get('configure_submodel')?.() === false,
+    `executor 已配置时本步不提供自动配置向导；实际注册: ${host.registered.join(',') || '空'}`,
   );
   assert(host.registered.includes('delegate_task'), 'delegate_task 仍要注册');
 });

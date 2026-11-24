@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Subagent model settings",
+    "description": "Order cost-effective and expert models, add purpose notes, and choose when to remind or switch models. Manage permissions separately in Subagent settings.",
+    "detail": "docs/plugin-detail.md"
+  }
+}

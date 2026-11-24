@@ -12,6 +12,7 @@
  *
  * 由 `test_flash_routing.py`（stdlib unittest）驱动，两者都进入常驻测试。
  */
+import { deepStrictEqual } from 'node:assert/strict';
 import { pathToFileURL } from 'node:url';
 import { resolve as resolvePath } from 'node:path';
 
@@ -65,6 +66,8 @@ const delegation = await import(delegationUrl);
 const setup = await import(setupUrl);
 const teamFit = await import(teamFitUrl);
 const entry = await import(entryUrl);
+const { installWatchdog, sumUsage } = await import(pathToFileURL(resolvePath(libDir, 'watchdog.js')).href);
+const { default: schema } = await import('@deepseek-ai/schemastery');
 
 /**
  * 真实原生 `subagent` 定义的 parameters 形状（2026-10-05 在运行中的宿主里实测）。
@@ -302,14 +305,14 @@ await check('isFlashModel: 大写后缀命中（大小写不敏感）', () => {
 await check('isFlashModel: 非后缀不误命中', () => {
   assert(policy.isFlashModel('flash-lite') === false, 'flash-lite 不是后缀');
   assert(policy.isFlashModel('flash') === true, 'flash 本身是后缀');
-  assert(policy.isFlashModel('deepseek-v4.1-flashx') === false);
-  assert(policy.isFlashModel('gpt-6.1-sol') === false);
+  assert(policy.isFlashModel('example-v4-flashx') === false);
+  assert(policy.isFlashModel('example-main') === false);
 });
 await check('isFlashModel: provider 名不参与判断', () => {
   // 唯一规则只看 model id；这些是 provider 名/其他标识，不该被当成 Flash。
-  assert(policy.isFlashModel('opencode-go') === false);
-  assert(policy.isFlashModel('deepseek-account') === false);
-  assert(policy.isFlashModel('p-opus') === false);
+  assert(policy.isFlashModel('fixture-executor') === false);
+  assert(policy.isFlashModel('fixture-account') === false);
+  assert(policy.isFlashModel('fixture-expert') === false);
 });
 await check('isFlashModel: 空值/非字符串安全', () => {
   assert(policy.isFlashModel(undefined) === false);
@@ -436,8 +439,8 @@ await check('resolveCallerRole: 过期 agent（无 requestHeader）失败', () =
 await check('resolveCallerRole: live root 成功（角色来自 durable header）', () => {
   const agent = {
     id: 'a',
-    options: { model: 'gpt-6.1-sol' },
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
+    options: { model: 'example-main' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
   };
   const r = policy.resolveCallerRole({ agent });
   assert(r.ok === true);
@@ -448,17 +451,17 @@ await check('resolveCallerRole: live root 成功（角色来自 durable header�
 
 // ── 3. 显式 pair 的完整性与路由默认值 ────────────────────────────────────────
 await check('classifyExplicitRoute: 完整 pair', () => {
-  assertEqual(policy.classifyExplicitRoute({ provider: 'p-opus', model: 'claude-opus-5-5' }), {
-    kind: 'pair', provider: 'p-opus', model: 'claude-opus-5-5',
+  assertEqual(policy.classifyExplicitRoute({ provider: 'fixture-expert', model: 'example-opus' }), {
+    kind: 'pair', provider: 'fixture-expert', model: 'example-opus',
   });
 });
 await check('classifyExplicitRoute: 只有 provider 立即失败', () => {
-  const r = policy.classifyExplicitRoute({ provider: 'p-opus' });
+  const r = policy.classifyExplicitRoute({ provider: 'fixture-expert' });
   assert(r.kind === 'invalid');
   assert(/model/.test(r.reason));
 });
 await check('classifyExplicitRoute: 只有 model 立即失败', () => {
-  const r = policy.classifyExplicitRoute({ model: 'claude-opus-5-5' });
+  const r = policy.classifyExplicitRoute({ model: 'example-opus' });
   assert(r.kind === 'invalid');
   assert(/provider/.test(r.reason));
 });
@@ -466,7 +469,7 @@ await check('classifyExplicitRoute: 都没有 = none', () => {
   assertEqual(policy.classifyExplicitRoute({ prompt: 'x' }), { kind: 'none' });
 });
 
-const EXECUTOR = { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'low' };
+const EXECUTOR = { provider: 'fixture-executor', model: 'example-v4-flash', reasoningEffort: 'low' };
 
 await check('resolveDelegationArgs: Flash 模式不补任何 route', () => {
   const r = policy.resolveDelegationArgs({ prompt: 'x' }, 'economize', EXECUTOR);
@@ -479,7 +482,7 @@ await check('resolveDelegationArgs: 非 Flash 尊重 executor 显式配置 low',
   const r = policy.resolveDelegationArgs({ prompt: 'x' }, 'boss', EXECUTOR);
   assert(r.ok === true);
   assert(r.applied === 'executor');
-  assertEqual([r.args.provider, r.args.model, r.args.reasoning_effort], ['opencode-go', 'deepseek-v4.1-flash', 'low']);
+  assertEqual([r.args.provider, r.args.model, r.args.reasoning_effort], ['fixture-executor', 'example-v4-flash', 'low']);
 });
 await check('resolveDelegationArgs: executor 未配置 effort 时缺省 max', () => {
   const resolved = policy.resolveDelegationArgs({ prompt: 'x' }, 'boss', { provider: EXECUTOR.provider, model: EXECUTOR.model });
@@ -496,20 +499,20 @@ await check('resolveDelegationArgs: 显式 low/off/high/xhigh 不被 max 缺省�
 await check('resolveDelegationArgs: 非 Flash 显式给了 effort 就保留', () => {
   const r = policy.resolveDelegationArgs({ prompt: 'x', reasoning_effort: 'max' }, 'boss', EXECUTOR);
   assertEqual(r.args.reasoning_effort, 'max', '给了 effort 必须保留');
-  assertEqual(r.args.provider, 'opencode-go', 'route 仍补 executor');
+  assertEqual(r.args.provider, 'fixture-executor', 'route 仍补 executor');
 });
 await check('resolveDelegationArgs: 完整显式 pair 不被改写、不注入 effort', () => {
   const r = policy.resolveDelegationArgs(
-    { prompt: 'x', provider: 'p-opus', model: 'claude-opus-5-5' },
+    { prompt: 'x', provider: 'fixture-expert', model: 'example-opus' },
     'boss',
     EXECUTOR,
   );
   assert(r.applied === 'explicit');
-  assertEqual([r.args.provider, r.args.model], ['p-opus', 'claude-opus-5-5']);
+  assertEqual([r.args.provider, r.args.model], ['fixture-expert', 'example-opus']);
   assert(r.args.reasoning_effort === undefined, '完整显式路线不注入策略 effort');
 });
 await check('resolveDelegationArgs: half pair 失败，不偷偷补 Go', () => {
-  const r = policy.resolveDelegationArgs({ prompt: 'x', provider: 'p-opus' }, 'boss', EXECUTOR);
+  const r = policy.resolveDelegationArgs({ prompt: 'x', provider: 'fixture-expert' }, 'boss', EXECUTOR);
   assert(r.ok === false, 'half pair 必须失败');
   assert(r.reason.includes('model'));
 });
@@ -528,9 +531,9 @@ await check('resolveDelegationArgs: 输入不被修改（Frozen input 不变）'
 
 // ── 4. assembly 路由解析：变量优先、缺 model 报错、listener 回退 agent.options ────
 await check('routeFromAssembly: provider+model 变量都取到', () => {
-  assertEqual(policy.routeFromAssembly({ variables: { provider: 'p-gpt', model: 'gpt-6.1-sol' } }), {
-    provider: 'p-gpt',
-    model: 'gpt-6.1-sol',
+  assertEqual(policy.routeFromAssembly({ variables: { provider: 'fixture-main', model: 'example-main' } }), {
+    provider: 'fixture-main',
+    model: 'example-main',
   });
 });
 await check('routeFromAssembly: 只有 model 时 provider 为空串', () => {
@@ -627,7 +630,7 @@ await check('assembly listener: variables 缺 model 时回退 agent.options；�
 await check('routingTextFor: 两种顶层模式文本不同且都含关键内容', () => {
   const renderContext = { executor: EXECUTOR, experts: [], texts: {}, economyRoutes: [] };
   const eco = policy.routingTextFor('root', { provider: 'dev-provider', model: 'deepseek-flash' }, renderContext);
-  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, renderContext);
+  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'example-main' }, renderContext);
   assert(eco !== boss, '两模式正文必须不同');
   assert(eco.includes('delegate_task') && boss.includes('delegate_task'));
   assert(!eco.includes(EXECUTOR.provider), 'Flash 段不该硬编码执行路由');
@@ -637,22 +640,22 @@ await check('routingTextFor: 子代文案不含主脑升级策略，且写明禁
   const child = policy.routingTextFor('child', undefined);
   assert(
     child !==
-      policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } }),
+      policy.routingTextFor('root', { provider: 'dev-provider', model: 'example-main' }, { executor: EXECUTOR, experts: [], texts: { economize: '', boss: '', child: '' } }),
     'child 不能复用 boss 文本',
   );
   assert(child.includes('delegate_task'), '要写明哪些能力不可用');
-  assert(!child.includes('p-opus'), 'child 段不得包含主脑升级策略（不得出现 p-opus 路由）');
+  assert(!child.includes('fixture-expert'), 'child 段不得包含主脑升级策略（不得出现 fixture-expert 路由）');
 });
 
 // ── 5. 嵌套调用：0.2.2 的批量执行形状 ───────────────────────────────────────
 await check('buildNestedCall: 批量形状 + arguments 是 JSON 文本 + agent/signal 透传', () => {
   const outerExec = { callId: 'C1', signal: 'sig', agent: 'ag' };
-  const nested = delegation.buildNestedCall(outerExec, { prompt: 'x', provider: 'p-opus' });
+  const nested = delegation.buildNestedCall(outerExec, { prompt: 'x', provider: 'fixture-expert' });
   assertEqual(nested.calls.length, 1, '必须是"只含一个 call 的批量"');
   assertEqual(nested.calls[0].id, 'C1:delegate');
   assertEqual(nested.calls[0].name, 'subagent', '必须调用原生 subagent');
   assertEqual(typeof nested.calls[0].arguments, 'string', 'arguments 必须是 JSON 文本');
-  assertEqual(JSON.parse(nested.calls[0].arguments), { prompt: 'x', provider: 'p-opus' });
+  assertEqual(JSON.parse(nested.calls[0].arguments), { prompt: 'x', provider: 'fixture-expert' });
   assertEqual(nested.signal, 'sig', 'signal 必须同一条（取消要能传播）');
   assertEqual(nested.agent, 'ag');
   assert(!('parent' in nested) && !('rootCallId' in nested), '0.2.2 批量 API 没有 parent/rootCallId 通道');
@@ -664,7 +667,7 @@ await check('buildNestedCall: toolSet 仅在存在时透传', () => {
   assert(!('toolSet' in without), '没有 toolSet 时不得凭空造一个');
 });
 await check('resultOfNestedCall: 按 callId 取 result', () => {
-  const result = { isError: false, value: { subagentId: 'child-1' } };
+  const result = { isError: false, value: { kind: 'activation', name: 'child-1' } };
   const batch = { results: [{ callId: 'C1:delegate', result }], additionalContexts: [], concluded: false };
   assertEqual(delegation.resultOfNestedCall(batch, 'C1:delegate'), result);
   assertEqual(delegation.resultOfNestedCall({ results: [] }, 'C1:delegate'), undefined);
@@ -719,8 +722,8 @@ await check('createDelegateTool: 子调用 isError 时抛出（不当成功 valu
     signal: undefined,
     agent: {
       id: 'a',
-      options: { model: 'gpt-6.1-sol' },
-      session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
+      options: { model: 'example-main' },
+      session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
     },
     deferContext() { throw new Error('must not defer on failure'); },
     concludeTurn() { throw new Error('must not conclude on failure'); },
@@ -730,7 +733,7 @@ await check('createDelegateTool: 子调用 isError 时抛出（不当成功 valu
     await tool.execute({ prompt: 'x' }, exec);
   } catch (error) {
     threw = true;
-    assert(/child route denied/.test(error.message), '错误必须带上子调用的可读诊断');
+    assert(error.message.includes('Delegation was refused') && !error.message.includes('child route denied'));
   }
   assert(threw, '子调用 isError 必须抛出，不能作为成功 value 返回');
 });
@@ -746,7 +749,7 @@ await check('createDelegateTool: 成功时只返回 result.value 并转移延迟
         assertEqual(input.calls[0].id, 'C1:delegate');
         assertEqual(typeof input.calls[0].arguments, 'string', 'arguments 必须是 JSON 文本');
         const parsed = JSON.parse(input.calls[0].arguments);
-        assert(parsed.provider === 'opencode-go', '非 Flash 应注入 Go pair');
+        assert(parsed.provider === 'fixture-executor', '非 Flash 应注入 Go pair');
         assert(parsed.reasoning_effort === 'low');
         assert(!('parent' in input) && !('rootCallId' in input), '不得再传 parent/rootCallId');
         return {
@@ -754,7 +757,7 @@ await check('createDelegateTool: 成功时只返回 result.value 并转移延迟
             callId: 'C1:delegate',
             result: {
               isError: false,
-              value: { kind: 'foreground', runId: 'run-1', output: [] },
+              value: { kind: 'activation', name: 'child-1' },
               additionalContexts: ['ctx-1'],
               concludesTurn: true,
             },
@@ -776,14 +779,14 @@ await check('createDelegateTool: 成功时只返回 result.value 并转移延迟
     signal: undefined,
     agent: {
       id: 'a',
-      options: { model: 'gpt-6.1-sol' },
-      session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
+      options: { model: 'example-main' },
+      session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
     },
     deferContext: (c) => deferred.push(c),
     concludeTurn: () => { concluded = true; },
   };
   const value = await tool.execute({ prompt: 'x' }, exec);
-  assertEqual(value, { kind: 'foreground', runId: 'run-1', output: [] }, '成功只返回 result.value');
+  assertEqual(value, { kind: 'activation', name: 'child-1' }, '成功只返回 result.value');
   assertEqual(deferred, ['ctx-1'], 'additionalContexts 必须转移到 deferContext');
   assert(concluded === true, 'concludesTurn 为 true 才调用 concludeTurn');
 });
@@ -808,7 +811,7 @@ await check('createDelegateTool: 子代调用被拒绝（只有顶层可用）',
     await tool.execute({ prompt: 'x' }, exec);
   } catch (error) {
     threw = true;
-    assert(/top-level/.test(error.message));
+    assert(error.message.includes('Only the main conversation'));
   }
   assert(threw, '子代调用 delegate_task 必须失败');
 });
@@ -850,19 +853,19 @@ await check('index.js Config: 默认值（enabled=true、preset=standard、execu
   assert(parsed.preset === 'standard');
   assert(parsed.toolName === 'list_subagent_models');
   assert(parsed.order === 2850);
-  assertEqual([parsed.executor.provider, parsed.executor.model, parsed.executor.reasoningEffort], ['', '', 'max']);
-  assertEqual(parsed.experts, [], '专家路由默认空，正文不渲染任何具体路由名');
+  assertEqual([parsed.executor.get().provider, parsed.executor.get().model, parsed.executor.get().reasoningEffort], ['', '', 'max']);
+  assertEqual(parsed.experts.get(), [], '专家路由默认空，正文不渲染任何具体路由名');
   assertEqual(parsed.texts, { economize: '', boss: '', child: '' });
   assert(parsed.guardNativeSubagent === true);
   assert(parsed.autoConfigure === true, '自动配置向导默认开启');
-  assertEqual(parsed.economyRoutes, [], '经济路由默认空 = 保留 flash 后缀兼容');
+  assertEqual(parsed.economyRoutes.get(), [], '经济路由默认空 = 保留 flash 后缀兼容');
   assertEqual(parsed.teamFit, { enabled: false }, '团队队形自检默认关闭（需显式开启，关掉即回滚）');
   const configured = entry.Config({
     autoConfigure: false,
     economyRoutes: [{ provider: 'eco-provider', model: 'eco-model' }],
   });
   assert(configured.autoConfigure === false);
-  assertEqual(configured.economyRoutes, [{ provider: 'eco-provider', model: 'eco-model' }]);
+  assertEqual(configured.economyRoutes.get(), [{ provider: 'eco-provider', model: 'eco-model' }]);
 });
 await check('index.js 导入无副作用，且导出 apply/name/inject', () => {
   assert(typeof entry.apply === 'function');
@@ -924,7 +927,7 @@ await check('apply(enabled=true): 非 standard composition 不装（composition 
   const candidate = {
     id: 'other',
     ctx: {},
-    session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })),
+    session: rootSession(() => ({ config: { model: 'example-main' } })),
     options: {},
   };
   const fakeCtx = {
@@ -950,8 +953,8 @@ await check('apply(enabled=true): 合格 standard root 只装 delegate_task（�
   const candidate = {
     id: 'std-root',
     ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const tools = {
     get: () => nativeSubagentDefinition(),
@@ -970,7 +973,7 @@ await check('apply(enabled=true): 合格 standard root 只装 delegate_task（�
     },
   };
   candidate.ctx = makeAgentCtx({ get: fakeCtx.get, tools, on: () => () => {}, disposedRegistrations });
-  entry.apply(fakeCtx, entry.Config({ enabled: true, executor: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'low' } }));
+  entry.apply(fakeCtx, entry.Config({ enabled: true, executor: { provider: 'fixture-executor', model: 'example-v4-flash', reasoningEffort: 'low' } }));
   // 安装是 async 的（reconcile → installAgent），让微任务跑完。
   await new Promise((r) => setTimeout(r, 50));
   assert(registered.includes('delegate_task'), `顶层必须注册 delegate_task，实际: ${registered.join(',')}`);
@@ -980,7 +983,7 @@ await check('apply(enabled=true): 合格 standard root 只装 delegate_task（�
   assert(guards.length >= 1, '必须注册角色 guard');
   assert(disposedRegistrations.length === 0, '未卸载前不该有任何注册被回收');
   // 宿主 register 会校验 output.schema（非法即抛 JsonSchemaError）；这里按同一套子集守护。
-  assertEqual(registeredDefinitions.length, 1, `只应注册 1 个工具定义（delegate_task），实际 ${registeredDefinitions.length}`);
+  assertEqual(registeredDefinitions.map(row => row.name), ['delegate_task', 'configure_submodel']);
   for (const definition of registeredDefinitions) {
     assertSupportedSchema(definition.parameters, `${definition.name}.parameters`);
     assertSupportedSchema(definition.output.schema, `${definition.name}.output.schema`);
@@ -990,7 +993,7 @@ await check('assembly: variables 变量优先于 agent.options / 过期 header�
   const assemblyListeners = [];
   const lookedUpServices = [];
   const disposedRegistrations = [];
-  let accepted = { id: 'assembly-root', config: { provider: 'opencode-go', model: 'deepseek-v4.1-flash' } };
+  let accepted = { id: 'assembly-root', config: { provider: 'fixture-executor', model: 'example-v4-flash' } };
   const candidate = {
     id: 'assembly-root',
     ctx: {},
@@ -1038,19 +1041,19 @@ await check('assembly: variables 变量优先于 agent.options / 过期 header�
   const listener = assemblyListeners[0];
 
   // assembly 变量是"GUI 即将发起的这笔请求"，必须压过 options 里的创建期旧值。
-  const bossAssembly = makeAssembly({ provider: 'p-gpt', model: 'gpt-6.1-sol' });
+  const bossAssembly = makeAssembly({ provider: 'fixture-main', model: 'example-main' });
   const boss = await listener(bossAssembly, { agent: candidate, scope: candidate }, async () => bossAssembly);
-  assertEqual(boss.sections[0].text, expectedFor({ provider: 'p-gpt', model: 'gpt-6.1-sol' }), 'assembly 变量必须覆盖 agent.options 的旧路由');
+  assertEqual(boss.sections[0].text, expectedFor({ provider: 'fixture-main', model: 'example-main' }), 'assembly 变量必须覆盖 agent.options 的旧路由');
   assert(boss.variables === bossAssembly.variables && boss.sections[1] === unchangedSection, '不能修改变量或无关段');
   assertEqual(boss.sections[0].interpolate, false);
 
   // 同一条 listener：换到经济路由后立刻切 economize 正文（不需要重新安装）。
-  accepted = { id: candidate.id, config: { provider: 'deepseek-account', model: 'deepseek-flash' } };
-  const economizeAssembly = makeAssembly({ provider: 'deepseek-account', model: 'deepseek-flash' });
+  accepted = { id: candidate.id, config: { provider: 'fixture-account', model: 'deepseek-flash' } };
+  const economizeAssembly = makeAssembly({ provider: 'fixture-account', model: 'deepseek-flash' });
   const economize = await listener(economizeAssembly, { agent: candidate, scope: candidate }, async () => economizeAssembly);
   assertEqual(
     economize.sections[0].text,
-    expectedFor({ provider: 'deepseek-account', model: 'deepseek-flash' }),
+    expectedFor({ provider: 'fixture-account', model: 'deepseek-flash' }),
     '换到经济路由必须立即切 economize 正文',
   );
   assert(economize.sections[1] === unchangedSection, '换模不能修改无关段');
@@ -1096,8 +1099,8 @@ await check('能力暂时缺失不得锁死：后续 tools/change 必须能补�
   const candidate = {
     id: 'std-root',
     ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const tools = {
     get: () => (nativeAvailable ? nativeSubagentDefinition() : undefined),
@@ -1116,7 +1119,7 @@ await check('能力暂时缺失不得锁死：后续 tools/change 必须能补�
     },
   };
   candidate.ctx = makeAgentCtx({ get: fakeCtx.get, tools, on: () => () => {}, disposedRegistrations });
-  entry.apply(fakeCtx, entry.Config({ enabled: true, executor: { provider: 'opencode-go', model: 'deepseek-v4.1-flash', reasoningEffort: 'low' } }));
+  entry.apply(fakeCtx, entry.Config({ enabled: true, executor: { provider: 'fixture-executor', model: 'example-v4-flash', reasoningEffort: 'low' } }));
 
   // ① 能力缺失时创建：允许不装，但**不得锁死**
   for (const [event, cb] of listeners) if (event === 'agent/created') await cb({ agent: candidate });
@@ -1140,8 +1143,8 @@ await check('能力出现后 agent/pre-step 也必须补装（不依赖 tools/ch
   const candidate = {
     id: 'std-root',
     ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const tools = {
     get: () => (nativeAvailable ? nativeSubagentDefinition() : undefined),
@@ -1183,8 +1186,8 @@ await check('子代 guard：对禁止工具返回字符串理由（不是抛异�
     id: 'std-child',
     ctx: {},
     // 角色只由 durable header 判定（options 里没有 subagentDepth，冷恢复场景）。
-    session: childSession(() => ({ id: 's2', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: childSession(() => ({ id: 's2', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const tools = {
     get: () => nativeSubagentDefinition(),
@@ -1236,7 +1239,7 @@ await check('子代 guard：允许非禁止工具（不误伤 read）', async ()
   const candidate = {
     id: 'std-child', ctx: {},
     session: childSession(() => ({ id: 's2', config: {} })),
-    options: { model: 'gpt-6.1-sol' },
+    options: { model: 'example-main' },
   };
   const tools = {
     get: () => nativeSubagentDefinition(),
@@ -1273,8 +1276,8 @@ await check('非 Flash root 的 native subagent guard：half pair 被拒、完�
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const tools = {
     get: () => nativeSubagentDefinition(),
@@ -1303,16 +1306,16 @@ await check('非 Flash root 的 native subagent guard：half pair 被拒、完�
     }
     return out;
   };
-  const halfPair = collect({ provider: 'p-opus' });
+  const halfPair = collect({ provider: 'fixture-expert' });
   assert(halfPair.length >= 1, '非 Flash 顶层用 native subagent 且只给 provider 时必须被拒');
   assert(/delegate_task/.test(halfPair[0]), '拒绝理由必须指向 delegate_task');
-  assertEqual(collect({ provider: 'p-opus', model: 'claude-opus-5-5' }), [], '完整显式 pair 必须放行');
+  assertEqual(collect({ provider: 'fixture-expert', model: 'example-opus' }), [], '完整显式 pair 必须放行');
   // plan 2.4：非 Flash 顶层"无完整显式 pair"一律拒绝并指向 delegate_task（防绕过默认 Go）。
   const noRoute = collect({ prompt: 'x' });
   assert(noRoute.length >= 1, '非 Flash 顶层用 native subagent 且完全不给 route 时必须被拒');
   assert(/delegate_task/.test(noRoute[0]), '无 route 的拒绝理由同样必须指向 delegate_task');
   // 只有 model、没有 provider 也是 half pair → 同样拒绝。
-  const halfPair2 = collect({ model: 'claude-opus-5-5' });
+  const halfPair2 = collect({ model: 'example-opus' });
   assert(halfPair2.length >= 1, '只给 model 也必须被拒');
 });
 
@@ -1322,8 +1325,8 @@ await check('重复 reconcile 不产生重复注册（幂等）', async () => {
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const listeners = [];
   const tools = {
@@ -1357,8 +1360,8 @@ await check('agent/disposed 后工具被卸载，且再次安装不报错', asyn
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const listeners = [];
   const tools = {
@@ -1392,8 +1395,8 @@ await check('安装失败时清理部分注册并上报（不吞异常）', asyn
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   let registeredCount = 0;
   const tools = {
@@ -1427,8 +1430,8 @@ await check('plugin dispose 卸载所有 owned 安装', async () => {
   const disposedRegistrations = [];
   const candidate = {
     id: 'std-root', ctx: {},
-    session: rootSession(() => ({ id: 's1', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
+    session: rootSession(() => ({ id: 's1', config: { provider: 'fixture-main', model: 'example-main' } })),
+    options: { model: 'example-main' },
   };
   const listeners = [];
   const tools = {
@@ -1458,10 +1461,10 @@ await check('plugin dispose 卸载所有 owned 安装', async () => {
 
 // ── 10. 正文模板化 / 渲染 / fail-fast 文案 ────────────────────────────────────
 await check('策略正文：升级判据是"问题复杂度"，审查不是理由，且只引用官方工具名', () => {
-  const renderContext = { executor: EXECUTOR, experts: [], texts: {}, economyRoutes: [] };
+  const renderContext = { executor: EXECUTOR, experts: [], texts: {}, economyRoutes: [], visibleTools: ['list_agents','send_message','wait_agent','interrupt_agent'] };
   for (const route of [
     { provider: 'dev-provider', model: 'deepseek-flash' },
-    { provider: 'dev-provider', model: 'gpt-6.1-sol' },
+    { provider: 'dev-provider', model: 'example-main' },
   ]) {
     const text = policy.routingTextFor('root', route, renderContext);
     assert(text.includes('复杂代码/逻辑判断'), '升级判据必须是"问题本身的复杂度"');
@@ -1469,23 +1472,24 @@ await check('策略正文：升级判据是"问题复杂度"，审查不是理�
     for (const banned of ['list_subagents', 'wait_subagents', 'send_subagent_message', 'interrupt_subagent']) {
       assert(!text.includes(banned), `正文不得出现本包不发布的工具名 ${banned}`);
     }
-    assert(!text.includes('m-opus'), '正文不得出现本机兜底路由名');
+    assert(!text.includes('fixture-fallback'), '正文不得出现本机兜底路由名');
   }
-  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, renderContext);
-  for (const official of ['list_agents', 'send_message', 'interrupt_agent']) {
+  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'example-main' }, renderContext);
+  for (const official of ['list_agents', 'send_message', 'wait_agent', 'interrupt_agent']) {
     assert(boss.includes(official), `boss 段必须引用官方控制工具 ${official}`);
   }
-  assert(!policy.routingTextFor('child', undefined).includes('p-opus'), 'child 段仍不得包含主脑升级策略');
+  assert(!policy.routingTextFor('root', { model: 'example-main' }, {}).includes('interrupt_agent'));
+  assert(!policy.routingTextFor('child', undefined).includes('fixture-expert'), 'child 段仍不得包含主脑升级策略');
 });
 await check('renderExpertRoutes: 逐行渲染，空数组给"未配置"提示', () => {
   const empty = policy.renderExpertRoutes([]);
   assert(empty.includes('未配置专家路由'), '空数组必须给提示行');
   assert(empty.includes('provider/model'), '提示行要指向显式传 provider/model');
   assertEqual(policy.renderExpertRoutes(undefined), empty, '非数组按空处理');
-  const one = policy.renderExpertRoutes([{ label: '代码专家', provider: 'p-opus', model: 'claude-opus-5-5', reasoningEffort: 'max' }]);
+  const one = policy.renderExpertRoutes([{ label: '代码专家', provider: 'fixture-expert', model: 'example-opus', reasoningEffort: 'max' }]);
   assert(one.includes('代码专家'));
-  assert(one.includes('provider: "p-opus"'));
-  assert(one.includes('model: "claude-opus-5-5"'));
+  assert(one.includes('provider: "fixture-expert"'));
+  assert(one.includes('model: "example-opus"'));
   assertEqual(one.split('\n').length, 1, '一条路由一行');
   const two = policy.renderExpertRoutes([
     { label: 'A', provider: 'pa', model: 'ma' },
@@ -1505,7 +1509,7 @@ await check('renderTemplate: 只替换两个占位符，executor 空为（未配
   assert(policy.renderTemplate('x{{executorRoute}}y', {}).includes('（未配置）'), 'executor 未配置时给可读占位');
 });
 await check('routingTextFor: texts 非空时整段替换且不再插值', () => {
-  const custom = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, {
+  const custom = policy.routingTextFor('root', { provider: 'dev-provider', model: 'example-main' }, {
     executor: { provider: 'route-a', model: 'model-a' },
     experts: [],
     texts: { boss: 'CUSTOM {{executorRoute}}' },
@@ -1513,8 +1517,8 @@ await check('routingTextFor: texts 非空时整段替换且不再插值', () => 
   assertEqual(custom, 'CUSTOM {{executorRoute}}', '用户覆盖正文后不得再插值');
   assertEqual(policy.routingTextFor('child', undefined, { texts: { child: 'CHILD CUSTOM' } }), 'CHILD CUSTOM');
   assertEqual(
-    policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, { texts: { economize: 'ECO CUSTOM' } }),
-    policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }),
+    policy.routingTextFor('root', { provider: 'dev-provider', model: 'example-main' }, { texts: { economize: 'ECO CUSTOM' } }),
+    policy.routingTextFor('root', { provider: 'dev-provider', model: 'example-main' }),
     '非当前模式的覆盖不生效',
   );
 });
@@ -1527,40 +1531,40 @@ await check('内置模板不含任何具体渠道/模型名（路由只经占位
   };
   for (const route of [
     { provider: 'dev-provider', model: 'deepseek-flash' },
-    { provider: 'dev-provider', model: 'gpt-6.1-sol' },
+    { provider: 'dev-provider', model: 'example-main' },
   ]) {
     const text = policy.routingTextFor('root', route, renderContext);
-    for (const leaked of ['p-opus', 'p-gpt', 'm-opus', 'opencode-go', 'deepseek-account', 'claude-opus-5-5', 'deepseek-v4.1-flash']) {
+    for (const leaked of ['fixture-expert', 'fixture-main', 'fixture-fallback', 'fixture-executor', 'fixture-account', 'example-opus', 'example-v4-flash']) {
       assert(!text.includes(leaked), `模板不得含本机路由名 ${leaked}`);
     }
   }
 });
 // ── 10b. 委派语义：启动即返回子会话 id、完成由运行时通知（plan §2.5）─────────────
-await check('正文（BOSS）：含「立即返回子会话 id」与「通知」', () => {
-  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'gpt-6.1-sol' }, {
+await check('正文（BOSS）：含「立即返回子代理名称」与「通知」', () => {
+  const boss = policy.routingTextFor('root', { provider: 'dev-provider', model: 'example-main' }, {
     executor: EXECUTOR,
     experts: [],
     texts: {},
     economyRoutes: [],
   });
-  assert(boss.includes('立即返回子会话 id'), 'boss 正文必须写明"启动后立即返回子会话 id"');
+  assert(boss.includes('立即返回子代理名称'), 'boss 正文必须写明"启动后立即返回子代理名称"');
   assert(boss.includes('通知'), 'boss 正文必须写明"完成时由运行时通知"');
-  assert(boss.includes('不要反复轮询'), '必须给出不轮询的纪律');
+  assert(boss.includes('等待超时只表示结果待核对'));
 });
-await check('正文（ECONOMIZE）：含「立即返回子会话 id」与「通知」', () => {
+await check('正文（ECONOMIZE）：含「立即返回子代理名称」与「通知」', () => {
   const economize = policy.routingTextFor('root', { provider: 'dev-provider', model: 'deepseek-flash' }, {
     executor: EXECUTOR,
     experts: [],
     texts: {},
     economyRoutes: [],
   });
-  assert(economize.includes('立即返回子会话 id'), 'Flash 正文必须写明"启动后立即返回子会话 id"');
+  assert(economize.includes('立即返回子代理名称'), 'Flash 正文必须写明"启动后立即返回子代理名称"');
   assert(economize.includes('通知'), 'Flash 正文必须写明"完成时由运行时通知"');
 });
 await check('正文（两模式）：不含过期的「直接返回结果 / return its result」', () => {
   const renderContext = { executor: EXECUTOR, experts: [], texts: {}, economyRoutes: [] };
   for (const route of [
-    { provider: 'dev-provider', model: 'gpt-6.1-sol' },
+    { provider: 'dev-provider', model: 'example-main' },
     { provider: 'dev-provider', model: 'deepseek-flash' },
   ]) {
     const text = policy.routingTextFor('root', route, renderContext);
@@ -1568,18 +1572,18 @@ await check('正文（两模式）：不含过期的「直接返回结果 / retu
     assert(!text.includes('return its result'), '不得出现英文旧措辞');
   }
 });
-await check('delegate_task 工具描述：含 "immediately returns its id"、不含 "return its result"', () => {
+await check('delegate_task 工具描述：含 "get its name"、不含 "return its result"', () => {
   const tool = delegation.createDelegateTool({
     ctx: { tools: { execute: async () => ({ results: [] }) } },
     nativeDefinition: nativeSubagentDefinition(),
     executor: EXECUTOR,
     logger: { info() {} },
   });
-  assert(tool.description.includes('immediately returns its id'), `工具描述必须写明立即返回 id；实际: ${tool.description}`);
-  assert(tool.description.includes('the runtime notifies you when it finishes'), '工具描述必须写明完成时由运行时通知');
+  assert(tool.description.includes('get its name'), `工具描述必须写明立即返回 id；实际: ${tool.description}`);
+  assert(tool.description.includes('The runtime delivers a completion notice'), '工具描述必须写明完成时由运行时通知');
   assert(!tool.description.includes('return its result'), '不得出现 "return its result" 旧语义');
   assert(!tool.description.includes('(Flash)') && !tool.description.includes('(non-Flash)'), '必须删除 "(Flash)/(non-Flash)" 旧措辞');
-  assert(tool.description.includes('current route'), '无显式路由时继承当前路由的说法必须保留');
+  assert(tool.description.includes('ordinary delegation'), '无显式路由时继承当前路由的说法必须保留');
 });
 await check('apply fail-fast: executor 未配置时记 error 日志且不抛', () => {
   const errors = [];
@@ -1596,7 +1600,7 @@ await check('apply fail-fast: executor 未配置时记 error 日志且不抛', (
 await check('apply fail-fast: 无 agentPresets 服务时每 agent 一次 warn（不静默）', async () => {
   const warns = [];
   const listeners = [];
-  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })), options: {} };
+  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'example-main' } })), options: {} };
   const fakeCtx = {
     logger: { info() {}, warn: (m) => warns.push(m), error() {} },
     tools: { get: () => undefined, register: () => () => {}, guard: () => () => {} },
@@ -1615,7 +1619,7 @@ await check('apply fail-fast: 无 agentPresets 服务时每 agent 一次 warn（
 await check('apply fail-fast: 原生 subagent 无 provider/model 时 warn 一次且不装 delegate_task', async () => {
   const warns = [];
   const registered = [];
-  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })), options: {} };
+  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'example-main' } })), options: {} };
   const tools = {
     get: (name) => (name === 'subagent'
       ? { parameters: { type: 'object', properties: { prompt: { type: 'string' } } }, output: {} }
@@ -1643,7 +1647,7 @@ await check('apply fail-fast: 原生 subagent 无 provider/model 时 warn 一次
 await check('apply fail-fast: list_subagent_models 不可见时 info 一次且策略段不渲染', async () => {
   const infos = [];
   const assemblyListeners = [];
-  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'gpt-6.1-sol' } })), options: { model: 'gpt-6.1-sol' } };
+  const candidate = { id: 'c1', ctx: {}, session: rootSession(() => ({ config: { model: 'example-main' } })), options: { model: 'example-main' } };
   const tools = {
     get: (name) => (name === 'subagent' ? nativeSubagentDefinition() : undefined),
     register: () => () => {},
@@ -1672,7 +1676,7 @@ await check('apply fail-fast: list_subagent_models 不可见时 info 一次且�
   await new Promise((r) => setTimeout(r, 50));
   assertEqual(assemblyListeners.length, 1);
   const assembly = Object.freeze({
-    variables: Object.freeze({ model: 'gpt-6.1-sol' }),
+    variables: Object.freeze({ model: 'example-main' }),
     sections: Object.freeze([Object.freeze({ name: 'tool:model-routing', text: '' })]),
   });
   const listener = assemblyListeners[0];
@@ -1768,7 +1772,7 @@ await check('buildSetupQuestions: 三问结构（id/multiSelect/选项来自候�
     ['prov-strong/strong-opus', 'prov-strong/strong-pro'],
     '专家选项只来自强推理组',
   );
-  assertEqual(authorizeQuestion.options.map((o) => o.label), ['yes', 'no']);
+  assertEqual(authorizeQuestion.options.map((o) => o.label), ['同时授权', '只保存偏好']);
   assert(
     executorQuestion.options.every((o) => typeof o.label === 'string' && o.label.includes('/')),
     '选项 label 就是回填键 provider/model',
@@ -1784,7 +1788,7 @@ await check('parseSetupAnswers: selected 正常解析（executor/experts/authori
     [
       { id: 'executor', selected: ['prov-eco/eco-lite'] },
       { id: 'experts', selected: ['prov-strong/strong-opus', 'prov-strong/strong-pro'] },
-      { id: 'authorize', selected: ['yes'] },
+      { id: 'authorize', selected: ['同时授权'] },
     ],
     setupCandidates(),
   );
@@ -1802,7 +1806,7 @@ await check('parseSetupAnswers: custom provider/model 解析（覆盖 selected +
     [
       { id: 'executor', selected: ['prov-eco/eco-lite'], custom: 'custom-prov/custom-exec' },
       { id: 'experts', selected: ['prov-strong/strong-opus'], custom: ' custom-prov/custom-expert ' },
-      { id: 'authorize', selected: ['no'] },
+      { id: 'authorize', selected: ['只保存偏好'] },
     ],
     setupCandidates(),
   );
@@ -1873,7 +1877,7 @@ await check('parseSetupAnswers: executor 跳过报错；authorize=no/缺省=fals
   const authorizeNo = policy.parseSetupAnswers(
     [
       { id: 'executor', selected: ['prov-eco/eco-flash'] },
-      { id: 'authorize', selected: ['no'] },
+      { id: 'authorize', selected: ['只保存偏好'] },
     ],
     candidates,
   );
@@ -1891,7 +1895,7 @@ await check('parseSetupAnswers: executor 跳过报错；authorize=no/缺省=fals
 });
 
 // 纯函数 ④：两处配置合并
-await check('composeNextPluginConfig: 保留其他字段，写 executor/experts/economyRoutes', () => {
+await check('composeNextPluginConfig: 保存两组模型并保留旧字段', () => {
   const current = {
     enabled: true,
     preset: 'standard',
@@ -1912,12 +1916,16 @@ await check('composeNextPluginConfig: 保留其他字段，写 executor/experts/
   assertEqual(next.preset, 'standard');
   assertEqual(next.toolName, 'list_subagent_models');
   assertEqual(next.texts, { boss: 'CUSTOM' }, '其他字段必须保留');
-  assertEqual(next.executor, { provider: 'prov-eco', model: 'eco-flash', reasoningEffort: 'max' });
-  assertEqual(next.experts, [
-    { label: 'prov-strong/strong-opus', provider: 'prov-strong', model: 'strong-opus' },
-    { label: 'prov-strong/strong-pro', provider: 'prov-strong', model: 'strong-pro' },
-  ]);
-  assertEqual(next.economyRoutes, [{ provider: 'prov-eco', model: 'eco-flash' }]);
+  assertEqual(next.executor, current.executor, '旧字段留作回退');
+  assertEqual(next.experts, current.experts, '旧字段留作回退');
+  deepStrictEqual(next.modelGroups, {
+    executors: [{ provider: 'prov-eco', model: 'eco-flash', reasoningEffort: '', note: '' }],
+    experts: [
+      { provider: 'prov-strong', model: 'strong-opus', reasoningEffort: '', note: '' },
+      { provider: 'prov-strong', model: 'strong-pro', reasoningEffort: '', note: '' },
+    ],
+  });
+  assertEqual(next.economyRoutes, current.economyRoutes, '已有非空经济路由必须保留');
   assertEqual(current.executor.provider, 'old-provider', '不得原地改 current');
   assertEqual(
     policy.composeNextPluginConfig(undefined, { executor: { provider: 'p', model: 'm' }, experts: [] }).economyRoutes,
@@ -1961,231 +1969,584 @@ await check('composeNextHostConfig: 去重合并、保留原顺序、enabled:tru
  * `configEditor.edit` 记录 `(entryId, next)` 并推进 entry 的 config，供断言写入顺序与合并值。
  */
 function makeWizardWorld(options = {}) {
-  const pluginEntry = { options: { id: 'submodel', config: { enabled: true, preset: 'standard' } } };
-  const hostEntry = options.noHostEntry
-    ? undefined
-    : {
-        options: {
-          id: 'subagent-model-selection-settings',
-          config: { enabled: false, allowedModels: [{ provider: 'existing', model: 'existing-model' }] },
-        },
-      };
-  const registered = [];
-  const registeredDefinitions = [];
+  const plugin = { enabled: true, preset: 'standard', ...options.config };
+  const host = { enabled: false, allowedModels: options.allowedModels ?? [{ provider: 'existing', model: 'existing-model' }] };
+  const rowMap = new Map([['submodel', { revision: 3, value: plugin }]]);
+  if (!options.noHost) rowMap.set(policy.HOST_SELECTION_ENTRY_ID, { revision: 5, value: host });
   const edits = [];
-  const askRequests = [];
-  const logs = { info: [], warn: [], error: [] };
-
-  const editor = options.noEditor
-    ? undefined
-    : {
-        entries: () => (hostEntry === undefined ? [pluginEntry] : [pluginEntry, hostEntry]),
-        edit: async (entry, change) => {
-          const next = change(structuredClone(entry.options.config ?? {}), {});
-          edits.push({ entryId: entry.options.id, next });
-          entry.options.config = next;
-        },
-      };
-  const llm = {
-    listProviders: () => [...new Set(SETUP_PACK.map((row) => row.provider))].map((id) => ({ id })),
-    listModels: async (provider) =>
-      SETUP_PACK.filter((row) => row.provider === provider).map((row) => ({ id: row.model, name: row.name, description: row.description })),
-    resolveModelInfo: async (provider, model) => {
-      const hit = SETUP_PACK.find((row) => row.provider === provider && row.model === model);
-      if (hit === undefined) throw new Error(`unknown model ${provider}/${model}`);
-      return hit;
-    },
-  };
-  const defaultAnswers = (questions) => {
-    const executorOptions = questions.find((q) => q.id === policy.SETUP_QUESTION_EXECUTOR)?.options ?? [];
-    const expertOptions = questions.find((q) => q.id === policy.SETUP_QUESTION_EXPERTS)?.options ?? [];
-    return [
-      { id: policy.SETUP_QUESTION_EXECUTOR, selected: executorOptions.length === 0 ? [] : [executorOptions[0].label] },
-      { id: policy.SETUP_QUESTION_EXPERTS, selected: expertOptions.map((option) => option.label) },
-      { id: policy.SETUP_QUESTION_AUTHORIZE, selected: [options.authorize ?? 'yes'] },
-    ];
-  };
-  const userQuestions = {
-    ask: async (request) => {
-      askRequests.push(request);
-      if (options.askError !== undefined) throw options.askError;
-      const answers = typeof options.answers === 'function' ? options.answers(request.questions) : defaultAnswers(request.questions);
-      return { answers };
-    },
-  };
-  const services = {
-    llm,
-    userQuestions,
-    configEditor: editor,
-    subagentModelSelection: { current: () => ({ enabled: false, allowedModels: [] }) },
-  };
-  const candidate = {
-    id: 'wizard-root',
-    ctx: {},
-    session: rootSession(() => ({ id: 's-wizard', config: { provider: 'p-gpt', model: 'gpt-6.1-sol' } })),
-    options: { model: 'gpt-6.1-sol' },
-  };
-  const tools = {
-    get: (name) => (name === 'subagent' ? nativeSubagentDefinition() : name === 'list_subagent_models' ? {} : undefined),
-    register: (definition) => {
-      registered.push(definition.name);
-      registeredDefinitions.push(definition);
-      return () => {};
-    },
-    guard: () => () => {},
-  };
-  const fakeCtx = {
-    logger: {
-      info: (message) => logs.info.push(message),
-      warn: (message) => logs.warn.push(message),
-      error: (message) => logs.error.push(message),
-    },
-    tools,
+  const asks = [];
+  const tools = new Map();
+  const agent = { id: 'wizard-root', session: rootSession(), options: { model: 'example-main' } };
+  const ctx = {
+    logger: { info() {}, warn() {}, error() {} },
     systemPrompt: { section: () => () => {} },
     on: () => () => {},
-    get: (name) => {
-      if (name === 'agents') return { list: () => [candidate] };
-      if (name === 'agentPresets') return { composedPreset: () => 'standard' };
-      return services[name];
+    tools: {
+      get: (name) => name === 'subagent' ? nativeSubagentDefinition() : undefined,
+      register: (definition, activation) => {
+        tools.set(definition.name, { definition, activation });
+        return () => tools.delete(definition.name);
+      },
+      guard: () => () => {},
     },
-    fiber: { entry: pluginEntry },
+    get: (name) => ({
+      agents: { list: () => [agent] }, agentPresets: { composedPreset: () => 'standard' },
+      settings: options.noSettings ? undefined : {
+        writable: !options.readOnly,
+        describe: () => [...rowMap].map(([ns, { value, revision }]) => ({ ns, revision, value: structuredClone(value) })),
+        async mutate(ns, ops, expectedRevision) {
+          const row = rowMap.get(ns);
+          if (row.revision !== expectedRevision) throw Object.assign(new Error('STALE'), { code: 'SETTINGS_CONFLICT' });
+          if (options.rejectHost && ns === policy.HOST_SELECTION_ENTRY_ID) throw new Error('private rejection');
+          assert(ops.every(op => op.op === 'set' && op.path.length === 1));
+          for (const op of ops) row.value[op.path[0]] = structuredClone(op.value);
+          row.revision++;
+          edits.push({ ns, ops, expectedRevision });
+        },
+      },
+      llm: {
+        listProviders: () => [...new Set(SETUP_PACK.map(row => row.provider))].map(id => ({ id })),
+        listModels: async (provider) => SETUP_PACK.filter(row => row.provider === provider).map(row => ({ id: row.model, name: row.name })),
+      },
+      userQuestions: {
+        async ask(request) {
+          asks.push(request);
+          if (options.askError) throw new Error('private diagnostic');
+          const answers = request.questions.map(q => ({
+            id: q.id,
+            selected: q.id === 'authorize' ? (options.skip ? [] : [options.authorization ?? '同时授权'])
+              : q.id === 'experts' ? q.options.map(opt => opt.label) : [q.options[0].label],
+          }));
+          if (request.questions[0].id === 'authorize' && options.conflict) rowMap.get(options.conflict).revision++;
+          return { answers };
+        },
+      },
+    })[name],
   };
-  candidate.ctx = makeAgentCtx({ get: fakeCtx.get, tools, on: () => () => {}, disposedRegistrations: [] });
+  agent.ctx = ctx;
+  entry.apply(ctx, plugin);
+  const setupEntry = tools.get(policy.SETUP_TOOL_NAME);
   return {
-    fakeCtx,
-    candidate,
-    registered,
-    registeredDefinitions,
-    edits,
-    askRequests,
-    logs,
-    logger: fakeCtx.logger,
-    tool: (name) => registeredDefinitions.find((definition) => definition.name === name),
-    async apply(configOverrides = {}) {
-      entry.apply(fakeCtx, entry.Config({ enabled: true, ...configOverrides }));
-      await new Promise((resolve) => setTimeout(resolve, 60));
+    setupEntry, plugin, host, asks, edits,
+    async run() { return setupEntry.definition.execute({}, { agent, signal: new AbortController().signal }); },
+  };
+}
+
+await check('向导独立询问授权，按两个修订号写入并随执行模型保存而隐藏', async () => {
+  const world = makeWizardWorld({ config: { economyRoutes: [{ model: 'retained' }] } });
+  assert(world.setupEntry.activation.when());
+  const result = await world.run();
+  assertEqual(world.asks.map(row => row.questions.map(q => q.id)), [['executor', 'experts'], ['authorize']]);
+  assertEqual(world.edits.map(row => [row.ns, row.expectedRevision]), [[policy.HOST_SELECTION_ENTRY_ID, 5], ['submodel', 3]]);
+  deepStrictEqual(world.plugin.modelGroups.executors, [{ provider: 'prov-eco', model: 'eco-flash', reasoningEffort: '', note: '' }]);
+  assert(!Object.hasOwn(world.plugin, 'executor'), 'the wizard writes only the new group setting');
+  assertEqual(world.plugin.economyRoutes, [{ model: 'retained' }]);
+  assert(world.host.enabled && world.host.allowedModels.length === 4);
+  assert(result.includes('已保存模型选择') && result.includes('已保存授权'));
+  assertEqual(world.setupEntry.activation.when(), false);
+  assert((await world.run()).includes('已在别处更新'));
+});
+
+await check('向导保留授权：跳过、只保存偏好均只写插件行', async () => {
+  for (const options of [{ skip: true }, { authorization: '只保存偏好' }]) {
+    const world = makeWizardWorld({ ...options, allowedModels: [] });
+    assert((await world.run()).includes('已保留原有授权'));
+    assertEqual(world.edits.map(row => row.ns), ['submodel']);
+    assertEqual(world.host, { enabled: false, allowedModels: [] });
+  }
+});
+
+await check('向导授权冲突、缺行或拒绝后，偏好仍可独立保存', async () => {
+  for (const options of [{ conflict: policy.HOST_SELECTION_ENTRY_ID }, { noHost: true }, { rejectHost: true }]) {
+    const world = makeWizardWorld(options);
+    const result = await world.run();
+    assert(result.includes('已保存模型选择') && result.includes('授权未写入'));
+    assert(!result.includes('private rejection'));
+    assertEqual(world.edits.map(row => row.ns), ['submodel']);
+  }
+});
+
+await check('向导偏好冲突保留已成功的授权，并说明实际结果', async () => {
+  const world = makeWizardWorld({ conflict: 'submodel' });
+  const result = await world.run();
+  assert(result.includes('已在别处更新') && result.includes('已保存授权'));
+  assertEqual(world.edits.map(row => row.ns), [policy.HOST_SELECTION_ENTRY_ID]);
+  assertEqual(world.plugin.executor, undefined);
+});
+
+await check('向导无设置、只读或问答失败时给手动路径，零写入', async () => {
+  for (const options of [{ noSettings: true }, { readOnly: true }, { askError: true }]) {
+    const world = makeWizardWorld(options);
+    const result = await world.run();
+    assert(result.includes('subagent-model-selection-settings') && !result.includes('private diagnostic'));
+    assertEqual(world.edits.length, 0);
+  }
+});
+
+await check('Config：实时字段可重建，宿主保留严格校验，默认关闭', () => {
+  const config = entry.Config({});
+  assertEqual(config.watchdog.get(), { mode: 'off', tiers: ['expert'], warnTokens: 100000, graceMs: 60000, maxRetries: 1 });
+  assertEqual(config.fallbacks.get(), []);
+  const fields = Object.fromEntries(['executor', 'experts', 'economyRoutes', 'fallbacks', 'modelGroups', 'watchdog'].map(name => {
+    const shape = new schema(entry.Config.dict[name].toJSON());
+    delete shape.meta.volatile;
+    return [name, shape];
+  }));
+  const wire = new schema(JSON.parse(JSON.stringify(schema.object(fields).toJSON())));
+  assertEqual(wire({}).watchdog, config.watchdog.get());
+  assertEqual(wire({}).modelGroups, 'legacy');
+  const primary = { provider: 'synthetic-provider', model: 'example-a' };
+  const groups = { executors: [{ ...primary, note: '代码优先', reasoningEffort: '' }], experts: [] };
+  assertEqual(wire({ modelGroups: groups }).modelGroups, groups);
+  assertEqual(entry.Config({ modelGroups: groups }).modelGroups.get(), groups);
+  assertEqual(entry.Config({ modelGroups: { executors: [], experts: [] } }).modelGroups.get(), { executors: [], experts: [] });
+  for (const invalid of [
+    { modelGroups: { ...groups, executors: [...groups.executors, ...groups.executors] } },
+    { modelGroups: { executors: [{ ...primary, model: ' ' }], experts: [] } },
+    { modelGroups: { executors: [{ ...primary, note: 'x'.repeat(121) }], experts: [] } },
+    { modelGroups: {} },
+    { fallbacks: [{ primary, alternatives: [primary] }] },
+    { fallbacks: [{ primary, alternatives: [] }, { primary, alternatives: [] }] },
+    { fallbacks: [{ primary: { ...primary, model: ' ' }, alternatives: [] }] },
+    { watchdog: { tiers: ['expert', 'expert'] } }, { watchdog: { tiers: [] } },
+    { watchdog: { mode: 'unknown' } }, { watchdog: { warnTokens: 2 ** 53 } },
+    { watchdog: { warnTokens: 1.5 } }, { watchdog: { graceMs: 999 } }, { watchdog: { maxRetries: 3 } },
+  ]) assertThrows(() => entry.Config(invalid));
+});
+
+await check('执行模型默认推理档：省略工具参数，显式档优先', () => {
+  const executor = { ...EXECUTOR, reasoningEffort: '' };
+  assert(!Object.hasOwn(policy.resolveDelegationArgs({ prompt: 'x' }, 'boss', executor).args, 'reasoning_effort'));
+  assertEqual(policy.resolveDelegationArgs({ prompt: 'x', reasoning_effort: 'high' }, 'boss', executor).args.reasoning_effort, 'high');
+});
+
+await check('分组显式点名补默认档位：专家行优先，点名档位优先', () => {
+  const executor = { ...EXECUTOR, reasoningEffort: '' };
+  const groups = {
+    executors: [{ provider: 'synthetic-provider', model: 'example-exec', note: '', reasoningEffort: 'low' }],
+    experts: [
+      { provider: 'synthetic-provider', model: 'example-both', note: '', reasoningEffort: 'max' },
+      { provider: 'synthetic-provider', model: 'example-expert', note: '', reasoningEffort: '' },
+    ],
+  };
+  const call = (args, modelGroups = groups) => policy.resolveDelegationArgs(args, 'boss', executor, modelGroups);
+  assertEqual(call({ prompt: 'x', provider: 'synthetic-provider', model: 'example-both' }).args.reasoning_effort, 'max');
+  assertEqual(call({ prompt: 'x', provider: 'synthetic-provider', model: 'example-both', reasoning_effort: 'high' }).args.reasoning_effort, 'high');
+  assert(!Object.hasOwn(call({ prompt: 'x', provider: 'synthetic-provider', model: 'example-expert' }).args, 'reasoning_effort'));
+  assertEqual(call({ prompt: 'x', provider: 'synthetic-provider', model: 'example-exec' }).args.reasoning_effort, 'low');
+  assert(!Object.hasOwn(call({ prompt: 'x', provider: 'unrelated', model: 'elsewhere' }).args, 'reasoning_effort'));
+  assert(!Object.hasOwn(policy.resolveDelegationArgs(
+    { prompt: 'x', provider: 'synthetic-provider', model: 'example-both' }, 'boss', executor, undefined,
+  ).args, 'reasoning_effort'), 'legacy 未保存分组时不注入档位');
+});
+
+const WATCH_PRIMARY = { provider: 'synthetic-provider', model: 'example-a' };
+const WATCH_BACKUP = { provider: 'synthetic-provider', model: 'example-b' };
+const WATCH_USAGE = { uncachedInputTokens: 100, outputTokens: 200, cacheReadTokens: 300, cacheWriteTokens: 400 };
+const flush = () => new Promise(resolve => setImmediate(resolve));
+
+function monitorFixture(options = {}) {
+  const listeners = new Map();
+  const timers = new Map();
+  const calls = [];
+  const parentMessages = [];
+  const children = new Map();
+  let now = 0;
+  let serial = 0;
+  function on(name, handler) {
+    const set = listeners.get(name) ?? new Set();
+    set.add(handler);
+    listeners.set(name, set);
+    return () => set.delete(handler);
+  }
+  function emit(name, ...values) {
+    for (const handler of [...(listeners.get(name) ?? [])]) handler(...values);
+  }
+  const clock = {
+    setTimeout(fn, delay) { const id = ++serial; timers.set(id, { fn, at: now + delay }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+  };
+  function advance(ms) {
+    const end = now + ms;
+    for (;;) {
+      const next = [...timers].sort((a,b) => a[1].at - b[1].at)[0];
+      if (!next || next[1].at > end) break;
+      now = next[1].at;
+      timers.delete(next[0]);
+      next[1].fn();
+    }
+    now = end;
+  }
+  const parent = { id: 'parent', session: { seq: 10 }, ctx: { on }, inject: msg => parentMessages.push(msg) };
+  const definition = nativeSubagentDefinition();
+  const allowedModels = options.allowedModels ?? [WATCH_BACKUP];
+  const grant = { enabled: !options.unauthorized, allowedModels };
+  const config = { watchdog: { mode: 'retry', warnTokens: 2000, graceMs: 1000, ...options.watchdog },
+    fallbacks: [{ primary: WATCH_PRIMARY, alternatives: options.choices ?? [WATCH_BACKUP] }],
+    modelGroups: options.modelGroups && structuredClone(options.modelGroups),
+  };
+  const services = {
+    agents: { get: id => id === parent.id ? parent : children.get(id) },
+    subagents: { namesOf: child => ({ self: child.name }) },
+    sessionProjections: {
+      snapshot: session => ({ values: { tokenUsage: session.usage } }),
+      stateOf: () => options.unrecorded ? null : allowedModels,
+      onChanged: callback => on('usage', callback),
+    },
+    settings: { describe: () => [{ ns: policy.HOST_SELECTION_ENTRY_ID, value: grant }] },
+    llm: { listModels: async (provider) => options.listModels ? await options.listModels() :
+      allowedModels.filter(row => row.provider === provider).map(row => ({ id: row.model })) },
+  };
+  const ctx = { on, get: name => services[name], tools: {
+    executable: () => definition,
+    async execute(input) {
+      calls.push(input);
+      if (options.execute) return options.execute(input);
+      return { results: [{ callId: input.calls[0].id, result: { isError: true } }] };
+    },
+  } };
+  const caller = new AbortController();
+  const watchdog = installWatchdog({ ctx, parent, config, nativeDefinition: definition, modelGroups: options.modelGroups, clock });
+  function begin(name, route = WATCH_PRIMARY, tier = 'expert') {
+    return watchdog.begin({ name, prompt: 'task', description: 'Fixture task', reasoning_effort: 'max' }, route, tier, { signal: caller.signal });
+  }
+  function childFor(ticket, id = 'child', route = WATCH_PRIMARY) {
+    const name = ticket.args.name;
+    const child = { id, name, status: 'running', session: { seq: 20, header: { parentSession: parent.id } }, notices: [] };
+    child.inject = (message) => { child.notices.push(message); emit('agent/inbox/inserted', { agent: child, message }); };
+    children.set(id, child);
+    const life = { id, runId: 'run-' + id, provider: 'spawn', parentSessionId: parent.id, local: true };
+    const signal = new AbortController();
+    const log = (type, data = {}) => emit('session/event', child.session, { type, data, seq: ++child.session.seq });
+    emit('subagent/start', life);
+    emit('agent/inbox/inserted', { agent: child, message: { id: 'first', source: { kind: 'user' } } });
+    emit('session/event', parent.session, { type: 'subagent/catalog', seq: ++parent.session.seq, data: { childId: id, name } });
+    emit('agent/pre-step', { agent: child, turn: 1, step: 1, signal: signal.signal, modelSelection: route }, () => {});
+    return { child, signal, log, life, receipt: { kind: 'activation', name },
+      usage({ sampled = true, value = WATCH_USAGE, text = '', continuing, step = 1, report = {
+        inputTokens: value.uncachedInputTokens, outputTokens: value.outputTokens,
+        cacheReadTokens: value.cacheReadTokens, cacheWriteTokens: value.cacheWriteTokens,
+      } } = {}) {
+        child.session.usage = value;
+        const message = continuing === true ? { content: [{ type: 'tool-call' }] }
+          : continuing === false ? { content: [{ type: 'text', text: 'complete' }] } : undefined;
+        log(continuing === undefined ? 'assistant/attempt' : 'assistant/message', { turn: 1, step, message, stream: [
+          ...(sampled ? [{ type: 'chunk', chunk: { type: 'usage', usage: report } }] : []),
+          ...(text ? [{ type: 'text-chunks', texts: [text] }] : []),
+        ] });
+        emit('usage', child.session, 'tokenUsage');
+      },
+      fail({ reason = 'error', code = 'RATE_LIMIT', step = 1, end = true, retryPolicy } = {}) {
+        emit('agent/request-error', { agent: child, turn: 1, step, provider: route.provider, failure: { code }, retryPolicy }, () => {});
+        log('turn/end', { turn: 1, reason: { kind: reason, error: { code } } });
+        children.delete(child.id);
+        emit('agent/disposed', { agent: child });
+        if (end) {
+          emit('subagent/end', { ...life, stopReason: reason });
+          emit('subagent/end', { ...life, stopReason: reason });
+        }
+      },
+    };
+  }
+  return { watchdog, config, grant, begin, childFor, advance, timers, calls, parentMessages, emit, caller,
+    assertClean() {
+      assertEqual(timers.size, 0);
+      watchdog.dispose();
+      assertEqual([...listeners.values()].reduce((n,set) => n + set.size, 0), 0);
     },
   };
 }
 
-// 接线 ①：注册门控（executor 未配置才注册向导；已配置不注册）
-await check('apply: executor 未配置时 root 注册 configure_submodel；已配置时不注册', async () => {
-  const empty = makeWizardWorld();
-  await empty.apply();
-  const setupTool = empty.tool(policy.SETUP_TOOL_NAME);
-  assert(setupTool !== undefined, `executor 未配置时 root 必须注册 configure_submodel；实际: ${empty.registered.join(',')}`);
-  assertEqual(setupTool.name, 'configure_submodel');
-  assertEqual(setupTool.parameters, {});
-  assertEqual(setupTool.output.schema, { type: 'string' });
-  assertEqual(typeof setupTool.output.render, 'function');
-  assertEqual(setupTool.output.render({}, 'hello'), [{ type: 'text', text: 'hello' }]);
-  assertSupportedSchema(setupTool.output.schema, 'configure_submodel.output.schema');
-  assert(empty.registered.includes('delegate_task'), 'delegate_task 仍要注册');
-
-  const configured = makeWizardWorld();
-  await configured.apply({ executor: { provider: 'cfg-provider', model: 'cfg-model', reasoningEffort: 'max' } });
-  assertEqual(configured.tool(policy.SETUP_TOOL_NAME), undefined, 'executor 已配置时不得注册向导');
-  assert(configured.registered.includes('delegate_task'), 'delegate_task 不受影响');
+await check('看护只接受全四桶和安全整数，小于阈值的自然失败只改派一次', async () => {
+  assertEqual(sumUsage(WATCH_USAGE), 1000);
+  assertEqual(sumUsage({ ...WATCH_USAGE, outputTokens: undefined }), undefined);
+  assertEqual(sumUsage({ ...WATCH_USAGE, outputTokens: Number.MAX_SAFE_INTEGER }), undefined);
+  const world = monitorFixture();
+  const ticket = world.begin('ordinary');
+  const run = world.childFor(ticket);
+  run.usage();
+  run.fail();
+  world.watchdog.finish(ticket, run.receipt);
+  await flush();
+  assertEqual(world.calls.length, 1);
+  const [{ calls: [call], toolSet }] = world.calls;
+  const replacement = JSON.parse(call.arguments);
+  assertEqual([call.name, replacement.provider, replacement.model], ['subagent', WATCH_BACKUP.provider, WATCH_BACKUP.model]);
+  assertEqual(replacement.prompt, 'task');
+  assertEqual(toolSet, undefined);
+  assert(!Object.hasOwn(replacement, 'reasoning_effort'));
+  world.assertClean();
 });
 
-// 接线 ②：正常调用 → 先写宿主授权、后写插件配置，返回文案写明两处结果
-await check('configure_submodel: 正常调用写两处（宿主授权先、插件配置后）', async () => {
-  const world = makeWizardWorld();
-  await world.apply();
-  const result = await world.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: world.candidate, signal: 'SIG-1' });
-  assert(result.includes('已写入执行路由 prov-eco/eco-flash'), `结果必须报出写入的执行路由；实际: ${result}`);
-  assert(result.includes('2 条专家路由'), `实际: ${result}`);
-  assert(result.includes('宿主授权已写入'), `实际: ${result}`);
-  assert(result.includes('新会话生效'), '必须提示新会话生效');
-  assertEqual(world.askRequests.length, 1);
-  const request = world.askRequests[0];
-  assertEqual(request.agent, world.candidate, 'ask 必须用 exec.agent');
-  assertEqual(request.signal, 'SIG-1', 'signal 必须透传');
-  assertEqual(
-    request.questions.map((q) => q.id),
-    [policy.SETUP_QUESTION_EXECUTOR, policy.SETUP_QUESTION_EXPERTS, policy.SETUP_QUESTION_AUTHORIZE],
-    '一张卡三问',
-  );
-  assertEqual(world.edits.length, 2, '必须写两处');
-  assertEqual(world.edits[0].entryId, policy.HOST_SELECTION_ENTRY_ID, '先写宿主授权（volatile，不重载）');
-  assertEqual(world.edits[1].entryId, 'submodel', '最后写插件配置（会重载本插件）');
-  assertEqual(world.edits[0].next.enabled, true);
-  assertEqual(
-    world.edits[0].next.allowedModels,
-    [
-      { provider: 'existing', model: 'existing-model' },
-      { provider: 'prov-eco', model: 'eco-flash' },
-      { provider: 'prov-strong', model: 'strong-opus' },
-      { provider: 'prov-strong', model: 'strong-pro' },
-    ],
-    '宿主授权 = 原有路由 + executor + experts，去重保序',
-  );
-  assertEqual(world.edits[1].next.executor, { provider: 'prov-eco', model: 'eco-flash', reasoningEffort: 'max' });
-  assertEqual(world.edits[1].next.experts, [
-    { label: 'prov-strong/strong-opus', provider: 'prov-strong', model: 'strong-opus' },
-    { label: 'prov-strong/strong-pro', provider: 'prov-strong', model: 'strong-pro' },
-  ]);
-  assertEqual(world.edits[1].next.economyRoutes, [{ provider: 'prov-eco', model: 'eco-flash' }]);
-  assertEqual(world.edits[1].next.preset, 'standard', '插件配置其他字段必须保留');
-});
-
-// 接线 ③：authorize=no → 只写插件配置
-await check('configure_submodel: authorize=no 只写插件配置', async () => {
-  const world = makeWizardWorld({ authorize: 'no' });
-  await world.apply();
-  const result = await world.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: world.candidate });
-  assert(result.includes('宿主授权未写入（按你的选择）'), `实际: ${result}`);
-  assertEqual(world.edits.length, 1, 'authorize=no 不得写宿主授权');
-  assertEqual(world.edits[0].entryId, 'submodel');
-  assertEqual(world.edits[0].next.executor.provider, 'prov-eco');
-});
-
-// 接线 ④：ask 抛错 → 手动 YAML 兜底、不写任何配置
-await check('configure_submodel: ask 抛错返回手动文本且不写配置', async () => {
-  const world = makeWizardWorld({ askError: Object.assign(new Error('no gui client'), { code: 'NO_PROVIDER' }) });
-  await world.apply();
-  const result = await world.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: world.candidate });
-  assert(result.includes('未能完成提问'), `实际: ${result}`);
-  assert(result.includes('NO_PROVIDER'), '错误码必须带出来');
-  assert(result.includes('请在 profile 补丁层'), '必须给手动两步 YAML 兜底');
-  assert(result.includes('subagent-model-selection-settings'), '手动 YAML 必须含宿主授权行');
-  assertEqual(world.edits.length, 0, 'ask 失败不得写任何配置');
-});
-
-// 接线 ⑤：非 root 调用抛错（只有顶层能用向导）
-await check('configure_submodel: 非 root 调用抛错', async () => {
-  const world = makeWizardWorld();
-  const tool = setup.createSetupTool({ ctx: world.fakeCtx, config: {}, logger: world.logger });
-  const child = {
-    id: 'wizard-child',
-    session: childSession(() => ({ config: {} })),
-    options: {},
-  };
-  let message = '';
-  try {
-    await tool.execute({}, { agent: child });
-  } catch (error) {
-    message = error.message;
+await check('无法核实的全零或缺失用量不能触发改派，即使此前有正数记录', async () => {
+  const zeroProjection = { uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 };
+  for (const sampled of [true, false]) {
+    for (const earlierReport of [true, false]) {
+      const world = monitorFixture();
+      const ticket = world.begin('ordinary');
+      const run = world.childFor(ticket);
+      world.watchdog.finish(ticket, run.receipt);
+      if (earlierReport) run.usage();
+      run.usage({ sampled, value: earlierReport ? WATCH_USAGE : zeroProjection,
+        report: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } });
+      run.fail();
+      await flush();
+      assertEqual(world.calls.length, 0);
+      world.assertClean();
+    }
   }
-  assert(/only available to a top-level agent/.test(message), `非 root 必须抛错；实际: ${message}`);
 });
 
-// 接线 ⑥：configEditor 缺失 / 宿主授权行缺失 → 手动 YAML 兜底，且不误写
-await check('configure_submodel: configEditor 缺失或宿主授权行缺失 → 手动 YAML / 只写插件', async () => {
-  const noEditor = makeWizardWorld({ noEditor: true });
-  await noEditor.apply();
-  const noEditorResult = await noEditor.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: noEditor.candidate });
-  assert(noEditorResult.includes('没有配置编辑器'), `实际: ${noEditorResult}`);
-  assert(noEditorResult.includes('请在 profile 补丁层'), '必须给手动两步 YAML');
-  assertEqual(noEditor.edits.length, 0);
+await check('看护拒绝未知用量、跨渠道、无授权、外部续聊、部分结果、工具调用、手停和链尾', async () => {
+  for (const test of [
+    { usage: { sampled: false } }, { usage: { text: 'partial' } },
+    { options: { unrecorded: true } }, { options: { unauthorized: true } },
+    { options: { choices: [{ provider: 'synthetic-other', model: 'example-stop' }] } },
+    { options: { choices: [] } }, { end: { reason: 'aborted' } }, { end: { code: 'UNKNOWN' } },
+    { step: run => run.log('tool/call') },
+    { step: (run, world) => world.emit('agent/inbox/inserted', { agent: run.child, message: { id: 'extra', source: { kind: 'user' } } }) },
+    { step: (run, world) => world.caller.abort() },
+  ]) {
+    const world = monitorFixture(test.options);
+    const ticket = world.begin('ordinary');
+    const run = world.childFor(ticket);
+    world.watchdog.finish(ticket, run.receipt);
+    run.usage(test.usage);
+    test.step?.(run, world);
+    run.fail(test.end);
+    await flush();
+    assertEqual(world.calls.length, 0);
+    world.assertClean();
+  }
+});
 
-  const noHost = makeWizardWorld({ noHostEntry: true });
-  await noHost.apply();
-  const noHostResult = await noHost.tool(policy.SETUP_TOOL_NAME).execute({}, { agent: noHost.candidate });
-  assert(noHostResult.includes('宿主授权行不存在'), `实际: ${noHostResult}`);
-  assert(noHostResult.includes('请按 README 手动添加该行'), '必须指向 README 手动步骤');
-  assertEqual(noHost.edits.length, 1, '宿主行缺失时只写插件配置');
-  assertEqual(noHost.edits[0].entryId, 'submodel');
+await check('看护预算提醒只注入一次，超时只提示人工；并发续聊撤销待提示动作', async () => {
+  for (const options of [{ mode: 'retry' }, { mode: 'stop' }, { mode: 'stop', follow: true }]) {
+    const world = monitorFixture({ watchdog: { mode: options.mode, warnTokens: 1000 } });
+    const ticket = world.begin('ordinary');
+    const run = world.childFor(ticket);
+    world.watchdog.finish(ticket, run.receipt);
+    run.usage({ continuing: true });
+    run.usage({ continuing: true });
+    assertEqual(run.child.notices.length, 0);
+    await flush();
+    assertEqual(run.child.notices.length, 1);
+    assertEqual(run.child.notices[0].source.kind, 'dsh-submodel-watchdog');
+    if (options.follow) world.emit('agent/inbox/inserted', { agent: run.child, message: { id: 'follow', source: { kind: 'user' } } });
+    world.advance(1000);
+    assertEqual(world.parentMessages.length, options.mode === 'stop' && !options.follow ? 1 : 0);
+    run.fail();
+    await flush();
+    assertEqual(world.calls.length, 0);
+    world.assertClean();
+  }
+});
+
+await check('收尾提醒排队后若子任务收到续聊或取消，就不再发送', async () => {
+  for (const reason of ['followup', 'cancel', 'final-reply']) {
+    const world = monitorFixture({ watchdog: { mode: 'stop', warnTokens: 1000 } });
+    const ticket = world.begin('ordinary');
+    const run = world.childFor(ticket);
+    world.watchdog.finish(ticket, run.receipt);
+    run.usage({ continuing: reason !== 'final-reply' });
+    if (reason === 'cancel') run.signal.abort();
+    if (reason === 'followup') world.emit('agent/inbox/inserted', { agent: run.child, message: { id: 'external', source: { kind: 'user' } } });
+    await flush();
+    world.advance(1000);
+    if (reason === 'final-reply') run.fail({ reason: 'completed' });
+    assertEqual(run.child.notices.length, 0);
+    assertEqual(world.parentMessages.length, 0);
+    world.assertClean();
+  }
+});
+
+await check('看护同名歧义、缺 start、缺 end 与关闭动作可清理', async () => {
+  const world = monitorFixture();
+  const a = world.begin('same');
+  const b = world.begin('same');
+  const run = world.childFor(a);
+  world.watchdog.finish(a, run.receipt);
+  world.watchdog.finish(b, run.receipt);
+  const pending = world.begin('pending');
+  world.watchdog.finish(pending, { kind: 'activation', name: 'pending' });
+  const missingEnd = world.begin('missing-end');
+  const released = world.childFor(missingEnd, 'another');
+  world.watchdog.finish(missingEnd, released.receipt);
+  released.usage();
+  released.fail({ end: false });
+  world.advance(30000);
+  const active = world.begin('active');
+  assert(active);
+  world.config.watchdog.mode = 'off';
+  world.emit('settings/document-updated', 'submodel');
+  assertEqual(world.calls.length, 0);
+  world.assertClean();
+});
+
+await check('分离两个运行，失效目录检查后拒绝改派，旧结束事件不会恢复任务', async () => {
+  let resolveDirectory;
+  const directory = new Promise(resolve => { resolveDirectory = resolve; });
+  const world = monitorFixture({ listModels: () => directory });
+  const first = world.begin('one');
+  const second = world.begin('two');
+  const a = world.childFor(first, 'child-one');
+  const b = world.childFor(second, 'child-two');
+  world.watchdog.finish(first, a.receipt);
+  world.watchdog.finish(second, b.receipt);
+  a.usage();
+  b.usage();
+  a.fail();
+  assertEqual(world.calls.length, 0);
+  world.grant.enabled = false;
+  b.fail();
+  resolveDirectory([{ id: WATCH_BACKUP.model }]);
+  await flush();
+  world.emit('subagent/end', { ...a.life, stopReason: 'error' });
+  world.emit('subagent/start', { ...a.life, runId: 'reopened' });
+  assertEqual(world.calls.length, 0);
+  world.assertClean();
+});
+
+await check('看护取消尚未返回的改派调用时，同时释放旧尝试的资源', async () => {
+  let enterDispatch;
+  const entered = new Promise(resolve => { enterDispatch = resolve; });
+  let finishDispatch;
+  const receipt = new Promise(resolve => { finishDispatch = resolve; });
+  const world = monitorFixture({ execute: () => { enterDispatch(); return receipt; } });
+  const ticket = world.begin('ordinary');
+  const attempt = world.childFor(ticket);
+  world.watchdog.finish(ticket, attempt.receipt);
+  attempt.usage();
+  attempt.fail();
+  await entered;
+  world.caller.abort();
+  assertEqual(world.calls[0].signal.aborted, true);
+  world.assertClean();
+  finishDispatch({ results: [] });
+  await flush();
+  assertEqual(world.calls.length, 1);
+});
+
+await check('取消看护不会中止已经受理的备选启动信号', async () => {
+  let world;
+  let replacement;
+  world = monitorFixture({ execute(input) {
+    const call = input.calls[0];
+    const args = JSON.parse(call.arguments);
+    replacement = world.childFor({ args }, 'child-backup', WATCH_BACKUP);
+    return { results: [{ callId: call.id, result: { isError: false, value: replacement.receipt } }] };
+  } });
+  const ticket = world.begin('ordinary');
+  const attempt = world.childFor(ticket);
+  world.watchdog.finish(ticket, attempt.receipt);
+  attempt.usage();
+  attempt.fail();
+  await flush();
+  assert(replacement !== undefined);
+  assertEqual(world.calls.length, 1);
+  world.config.watchdog.mode = 'off';
+  world.emit('settings/document-updated', 'submodel');
+  assertEqual(world.calls[0].signal.aborted, false);
+  world.assertClean();
+});
+
+function exhaustGroupRetries(run, route, { count = 5, limit = 5, lastStarted = true, missingAt, startedId } = {}) {
+  const retryId = 'group-retry';
+  for (let retry = 1; retry <= count; retry++) {
+    run.usage({ sampled: retry !== missingAt });
+    run.log('llm/retry', { turn: 1, step: 1, retry, retryId, provider: route.provider,
+      mode: 'normal', maxRetries: limit, policyKey: 'group-policy' });
+    if (retry !== count || lastStarted) {
+      run.log('llm/retry-started', { turn: 1, step: 1, retry, retryId: startedId ?? retryId });
+    }
+  }
+  run.usage({ sampled: missingAt !== count + 1 });
+  return { mode: 'normal', maxRetries: limit, retryableCodes: ['RATE_LIMIT'] };
+}
+
+const groupFirst = { provider: 'synthetic-other', model: 'example-first' };
+const groupNext = { provider: 'synthetic-other', model: 'example-next' };
+const groupOrder = [groupFirst, WATCH_PRIMARY, groupNext];
+const modelGroupsFor = tier => tier === 'expert' ? { executors: [], experts: groupOrder }
+  : { executors: groupOrder, experts: [] };
+
+await check('两组模型都在五次宿主重试后从所选位置往后，跨渠道只尝试下一位', async () => {
+  for (const tier of ['executor', 'expert']) {
+    const world = monitorFixture({ modelGroups: modelGroupsFor(tier), allowedModels: [groupFirst, groupNext],
+      watchdog: { tiers: [tier] } });
+    const ticket = world.begin('ordinary', WATCH_PRIMARY, tier);
+    const run = world.childFor(ticket);
+    world.watchdog.finish(ticket, run.receipt);
+    const retryPolicy = exhaustGroupRetries(run, WATCH_PRIMARY);
+    assertEqual(world.calls.length, 0, 'a retry record alone must not start the next model');
+    run.fail({ retryPolicy });
+    await flush();
+    assertEqual(world.calls.length, 1);
+    const args = JSON.parse(world.calls[0].calls[0].arguments);
+    assertEqual([args.provider, args.model], [groupNext.provider, groupNext.model]);
+    assert(!Object.hasOwn(args, 'note') && !Object.hasOwn(args, 'reasoning_effort'));
+    world.assertClean();
+  }
+});
+
+await check('分组任务缺少结束证据、额度或授权时不会换模型', async () => {
+  for (const scenario of [
+    { retry: { count: 4 } }, { retry: { limit: 6 } }, { retry: { count: 4, limit: 4 } },
+    { retry: { lastStarted: false } }, { retry: { startedId: 'different-retry' } },
+    { retry: { missingAt: 2 } }, { retry: { missingAt: 6 } },
+    { step: 2 }, { always: true }, { reason: 'aborted' }, { tool: true }, { partial: true }, { routeChanged: true },
+    { unrecorded: true }, { revoked: true }, { reordered: true }, { atTail: true },
+    { overBudget: true }, { catalogMissing: true },
+  ]) {
+    const modelGroups = modelGroupsFor('expert');
+    const world = monitorFixture({ modelGroups, allowedModels: [groupFirst, groupNext], unrecorded: scenario.unrecorded,
+      listModels: scenario.catalogMissing ? async () => [] : undefined });
+    const initial = scenario.atTail ? groupNext : WATCH_PRIMARY;
+    const ticket = world.begin('ordinary', initial, 'expert');
+    const run = world.childFor(ticket, 'child', initial);
+    world.watchdog.finish(ticket, run.receipt);
+    const retryPolicy = exhaustGroupRetries(run, initial, scenario.retry);
+    if (scenario.overBudget) run.usage({ value: { ...WATCH_USAGE, outputTokens: 1200 } });
+    if (scenario.revoked) world.grant.enabled = false;
+    if (scenario.reordered) world.config.modelGroups.experts.reverse();
+    if (scenario.tool) run.log('tool/call');
+    if (scenario.routeChanged) run.log('request/context', groupFirst);
+    if (scenario.partial) run.usage({ text: 'partial result' });
+    run.fail({ step: scenario.step, reason: scenario.reason, retryPolicy: scenario.always ? { mode: 'always' } : retryPolicy });
+    await flush();
+    assertEqual(world.calls.length, 0, JSON.stringify(scenario));
+    world.assertClean();
+  }
+});
+
+await check('分组改派用目标模型的配置档位，不继承原档位', async () => {
+  const withEffort = { provider: 'synthetic-other', model: 'example-next', note: '', reasoningEffort: 'high' };
+  const world = monitorFixture({ modelGroups: { executors: [], experts: [WATCH_PRIMARY, withEffort] },
+    allowedModels: [WATCH_PRIMARY, withEffort] });
+  const ticket = world.begin('ordinary');
+  const run = world.childFor(ticket);
+  world.watchdog.finish(ticket, run.receipt);
+  const retryPolicy = exhaustGroupRetries(run, WATCH_PRIMARY);
+  run.fail({ retryPolicy });
+  await flush();
+  assertEqual(world.calls.length, 1);
+  assertEqual(JSON.parse(world.calls[0].calls[0].arguments).reasoning_effort, 'high');
+  world.assertClean();
+});
+
+await check('宿主派发异常时通知结果未确认并收回观察资源', async () => {
+  const world = monitorFixture({ modelGroups: modelGroupsFor('expert'), allowedModels: [groupNext],
+    execute() { throw new Error('fixture private provider failure'); } });
+  const ticket = world.begin('ordinary');
+  const run = world.childFor(ticket);
+  world.watchdog.finish(ticket, run.receipt);
+  run.fail({ retryPolicy: exhaustGroupRetries(run, WATCH_PRIMARY) });
+  await flush();
+  assertEqual(world.calls.length, 1);
+  assertEqual(world.parentMessages.length, 1);
+  const notice = world.parentMessages[0].content[0].text;
+  assert(notice.includes('ordinary') && notice.includes('子代理面板') && !notice.includes('private provider failure'));
+  world.assertClean();
 });
 
 // ── 12. 团队队形自检（tool:team-fit）：纯函数 + 假宿主入口接线 ────────────────

@@ -13,18 +13,11 @@
 [![npm version](https://img.shields.io/npm/v/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![npm downloads](https://img.shields.io/npm/dm/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![license](https://img.shields.io/npm/l/dsh-submodel.svg)](https://github.com/angel291592/dsh-submodel/blob/main/LICENSE)
-[![DSH](https://img.shields.io/badge/DeepSeek%20Harness-%E2%89%A50.2.2-4d6bfe.svg)](https://github.com/angel291592/dsh-submodel)
-[![dshbase](https://img.shields.io/badge/dshbase-install--tested-2ea44f.svg)](https://github.com/ylwl1997/dshbase/issues/221)
+[![DSH >=0.2.2-rc.5](https://img.shields.io/badge/DSH-0.2.2--rc.5%20or%20later-4d6bfe.svg)](https://github.com/angel291592/dsh-submodel)
 
 [中文](README.md) | **English**
 
-It does **not** ship its own provider system — it reads the channels and models already configured in your
-profile, writes a delegation policy into the system prompt, and adds one unified entry point
-(`delegate_task`) on top of the official `subagent`. Since 0.2.0 the mode is decided by **route** (no model
-naming convention required), and there is a first-run setup wizard plus `economyRoutes`. Since 0.3.0 you can
-optionally enable the **team formation self-check**: with Agent Teams enabled, the top-level main model declares
-whether to parallelise, how many teammates to start, and which model each one uses before the first real task
-(off by default). Requires DSH `0.2.2-rc.1` (`0.2.1` and older are not compatible).
+Open **Plugins → Subagent model settings** to order the cost-effective and expert model groups and add a note about what each model is good for. The main model can choose where to start. With automatic switching enabled, eligible failures move forward from that choice. DSH manages providers, credentials, and model permissions. Version `0.4.0` requires DSH `>=0.2.2-rc.5 <0.3.0`.
 
 ## Install
 
@@ -36,20 +29,19 @@ dsh --profile <your-profile>                           # 2. start (restart the p
 
 ## Configuration (two steps)
 
-Configuration has **two layers**, and delegation only works when both are done:
+Delegating to a different model requires choosing preferences and allowing that model in DSH:
 
 | Layer | What it controls | If missing |
 |---|---|---|
-| ① Host authorization | DSH's own "subagent model selection" setting: which routes a subagent may switch to | Delegating to a non-inherited route fails with `child LLM route "…/…" is not allowed for this Session` |
-| ② Plugin config | This package's `executor` (execution route) and `experts` (expert routes) | In boss mode there is no default delegation target: an `error` is logged and nothing is delegated |
+| ① Host authorization | Which models new conversations may delegate to | The current conversation cannot delegate to a different, unauthorized model |
+| ② Plugin preferences | The default execution model and the expert models to choose from | A strong main agent without an execution model cannot select a default for routine delegation |
 
 ### ① Host authorization (required)
 
 By default the native `subagent` only lets a child inherit the parent session's route. To let a child switch
 to an execution/expert route, authorize it in the host first:
 
-- **GUI**: open **subagent model selection** in Settings (config id `subagent-model-selection-settings`),
-  turn it on, and add the execution route and expert routes to the allow-list one by one.
+- **UI:** open **Subagent** settings under Plugins, turn on model selection, and allow each execution, expert, and fallback model you intend to use.
 - **Or write the profile patch YAML** (`~/.dsh/profiles/<your-profile>/cordis.patch.yml`; the file is an empty
   array `[]` by default — append the entry to that array):
 
@@ -62,42 +54,30 @@ to an execution/expert route, authorize it in the host first:
         model: your-model
       - provider: your-provider
         model: your-strong-model
+      - provider: your-other-provider
+        model: your-backup-model
 ```
 
 Note: `allowedModels` must not be empty when `enabled: true`; host authorization only applies to **new
 sessions**, so open a new session (or restart the profile) after writing it.
 
-### ② Plugin configuration (pick one)
+### ② Plugin configuration
 
-**Option A (recommended): call `configure_submodel` on the first session — it writes both places**
+**Settings page:** open **Plugins → Subagent model settings**. Add models to either group, change the order, and enter short notes such as “Prefer for code”. The first model in each group is the usual starting point; the main model can use the notes to pick another one. Allow each model separately in Subagent settings. If another page saves first, your draft is kept. Load the saved settings and review the draft before saving it. Reload the page if the connection changes.
 
-No YAML by hand. As long as you are the top-level agent, `autoConfigure` keeps its default `true`, and
-`executor` is not configured yet, the `configure_submodel` tool appears on the first session:
+**First-run wizard:** call `configure_submodel` from a top-level agent with `autoConfigure` on and no execution model configured. It asks for execution and expert models first, then asks separately whether to add host authorization. The two writes are separate; the wizard reports which succeeded. Saving an execution model hides the wizard.
 
-1. Call it. It asks three questions — **execution route** (where verifiable execution blocks go; single
-   choice), **expert routes** (models you may name when escalating; multi-choice), and **whether to write the
-   host authorization row too** (recommended: yes);
-2. On confirmation it uses the official `configEditor` to write **host authorization first, then plugin
-   config** (the plugin config's `executor`, `experts` and `economyRoutes` all reflect your choices), so both
-   take effect together;
-3. It takes effect on the next session. Writing the plugin config reloads this plugin and the tool
-   disappears afterwards — that is expected, not an error.
-
-On clients without a GUI (headless / plain CLI) or when a required service is missing, no question card is
-shown: the tool returns copyable manual YAML instead and **writes nothing**.
-
-**Option B: five-line YAML by hand**
-
-In your profile patch layer (`~/.dsh/profiles/<your-profile>/cordis.patch.yml`), override this package by id.
-The file is an empty array `[]` by default: **replace `[]` with the entry below**; if it already has entries,
-append this one to the array.
+**Without the settings page:** add or update the `submodel` entry in your profile patch. Keep any other fields in that entry. If the host cannot show question cards, the wizard explains how to configure preferences and authorization manually.
 
 ```yaml
 - id: submodel
   config:
-    executor:
-      provider: your-provider
-      model: your-model
+    modelGroups:
+      executors:
+        - { provider: your-provider, model: your-model, note: Prefer for code }
+        - { provider: your-other-provider, model: your-backup-model }
+      experts:
+        - { provider: your-provider, model: your-strong-model, note: Architecture decisions }
 ```
 
 Note: a profile patch **replaces the whole `config` block** of an entry — fields you leave out fall back to
@@ -111,21 +91,34 @@ Full field reference:
 | `autoConfigure` | `true` | Whether to register the `configure_submodel` wizard for first-run setup (visible only for a top-level agent whose `executor` is not configured); turn it off to configure everything manually |
 | `preset` | `standard` | Only applies to that composition |
 | `teamFit.enabled` | `false` | Team formation self-check section (0.3.0+): needs the master `enabled` switch to be `true` as well, plus the official Agent Teams plugin; visible only to the top-level main model of the target preset — see below. Off by default, which is the rollback state |
-| `executor.provider` / `executor.model` | empty | Execution route: the default delegation target in boss mode; **leaving it empty logs an `error`** (see Troubleshooting). Switching the main model to this route also means Flash mode |
-| `executor.reasoningEffort` | `max` | Default effort only when the caller did not specify one |
-| `economyRoutes` | `[]` | Extra "cheap routes", each `{provider?, model}`: the current request matching any of them counts as Flash (`economize`) mode. Omit `provider` to match on `model` alone; **when non-empty, the legacy flash-suffix rule no longer applies** |
-| `experts` | `[]` | Expert routes you may name explicitly when escalating, each `{label, provider, model, reasoningEffort?}`; `reasoningEffort` is reserved for now and does not affect delegation |
+| `modelGroups` | `legacy` (use previous settings) | Ordered `executors` and `experts` lists. Each entry is `{provider, model, note?, reasoningEffort?}`. Pairs may not repeat within a group. Every model can have a default reasoning effort: it applies when a delegation names no effort and when switching lands on that model; empty leaves it to the model, and an effort named in the call wins |
+| `executor`, `experts` | Unset | Used only before saving the group lists. Omitting the old executor's `reasoningEffort` keeps `max`; `""` leaves it to the model |
+| `economyRoutes` | `[]` | Extra cost-effective routes, each `{provider?, model}`. Omit `provider` to match on `model` alone. When non-empty, the legacy `flash` suffix rule no longer applies |
 | `texts.economize` / `texts.boss` / `texts.child` | empty | When non-empty, replaces the built-in prompt section verbatim (no interpolation afterwards) |
 | `toolName` | `list_subagent_models` | Tool name used as the capability gate for the policy section |
 | `order` | `2850` | Order of the policy section in the system prompt |
-| `guardNativeSubagent` | `true` | Whether to reject a non-economy-route (non-Flash mode) top-level agent that calls the native `subagent` without a complete provider/model pair |
+| `guardNativeSubagent` | `true` | Requires a complete provider and model pair when a strong main agent calls the native `subagent` directly |
+| `fallbacks` | `[]` | Legacy only. Entries are `{primary: {provider, model}, alternatives: [...]}`. Saving the new groups switches to their order |
+| `watchdog.mode` | `off` | `off` disables monitoring, `notify` reminds the child to finish, `stop` prompts for a manual stop after the grace period, and `retry` retries eligible failures |
+| `watchdog.tiers` | `[expert]` | Monitor `expert` and/or `executor` |
+| `watchdog.warnTokens` | `100000` | Threshold for cumulative reported token usage (a positive integer) |
+| `watchdog.graceMs` | `60000` | `1000`–`600000` milliseconds after the finish-up reminder is delivered |
+| `watchdog.maxRetries` | `1` | Maximum number of automatic retries per task, `0`–`2` |
+
+## Usage reminders and automatic switching
+
+**Usage reminders** are off by default. They apply to selected groups of local subagents started through `delegate_task`. Usage comes from the reported totals; a single request can go over the reminder amount. Missing and explicitly zero usage are indistinguishable in the current host, so both count as unknown. The page shows the wait in seconds. At the end of that wait, it prompts you to stop the task yourself.
+
+**Try the next model after failure** uses the next entry in the same group only when the current model has exhausted the host's bounded retries (five after the first failure by default, and no switch if it ran fewer than five). The task needs known usage below the reminder amount, with no partial output, tool calls, manual stop, or outside follow-up. The order starts at the chosen model and moves forward without wrapping or skipping unavailable entries. The switched-to model uses its own configured default effort (unset leaves it to the model); the failed model's effort is not carried over. The next model must be allowed by both the current settings and the original conversation. It can be on a different provider, which receives the same task and may charge for it. Turning monitoring off cancels pending actions without stopping tasks the host has already accepted.
+
+Each request needs a verifiable usage sample for automatic switching. A later report cannot fill in an earlier missing or zero sample. Existing settings keep their behavior until you save the groups. To carry forward old backup models, add them to the relevant group. If a provider/model pair is in both groups, naming it explicitly uses the expert group.
 
 ## How it decides who does what (route-based since 0.2.0)
 
 There are two modes, and the decision looks only at the **route of the current request** (`provider` +
 `model`) — no model-name suffix is required:
 
-1. Current request route **== the configured `executor` route** → **Flash (`economize`) mode**;
+1. The current request matches the cost-effective group (or the old `executor` if no groups are saved) → **Flash (`economize`) mode**;
 2. The request matches any route in **`economyRoutes`** → **Flash (`economize`) mode** (for multiple cheap routes);
 3. When `economyRoutes` is empty, the legacy rule still applies: a model name ending in `flash` → **Flash
    (`economize`) mode**;
@@ -134,19 +127,17 @@ There are two modes, and the decision looks only at the **route of the current r
 Built-in behaviour:
 
 - **Flash mode**: do the work yourself by default; ordinary subtasks go through `delegate_task` (no
-  provider/model — the child inherits the current route); escalate only when "the problem itself is complex"
-  or "it exceeds your execution limits", naming a route from `experts`.
-- **Boss mode**: understanding, judgement and writing stay with the main model; verifiable execution blocks
-  default to the configured `executor` route.
+  provider/model means the child inherits the current route). Escalate only for complex problems or tasks beyond your execution limits, choosing an expert by order and note.
+- **Boss mode**: understanding, judgment, and writing stay with the main model. Verifiable tasks use the first cost-effective model by default. The main model can name another model based on its note.
 - **Children**: hard boundary — `delegate_task` / `subagent` / `subagent_fork` / `workflow` / `spawn_teammate`
   are unavailable to a child, preventing recursive delegation.
 - **`delegate_task`**: same parameters as the native `subagent` (`description`, `prompt`, and optional
   `provider` / `model` / `reasoning_effort`; `provider` and `model` must be supplied **together** — one alone
-  fails immediately). It goes through `ctx.tools.execute` and raises a real native call, so the host's
-  allowlist / preflight / permissions still apply. Since 0.2.0 the semantics are "starts an independently
-  managed subagent and **immediately returns its id**; the runtime notifies you when it finishes": do not poll
-  repeatedly — use `list_agents` to look at live subagents, `send_message` to append, and `interrupt_agent` to
-  stop. Call `list_subagent_models` first if you are unsure which routes are authorized.
+  fails immediately). When a call names no reasoning effort, the model's configured default from the two
+  groups applies; unset leaves it to the model. It goes through `ctx.tools.execute` and raises a real native call, so the host's
+  allowlist, preflight, and permissions still apply. On success it returns the native receipt `{kind: 'activation', name}`.
+  Use the name to look up or message the subagent. The runtime delivers a separate completion notice.
+  Call `list_subagent_models` first if you are unsure which routes are authorized.
 
 Two typical calls:
 
@@ -210,45 +201,35 @@ does not affect other prompt sections.
 
 | Capability | Provided by |
 |---|---|
-| Status view `list_agents`, append `send_message`, stop `interrupt_agent` | Official `@deepseek-ai/dsh-tool-subagent-control` (this package does **not** register them) |
-| Policy text, `delegate_task`, child guard, `configure_submodel` wizard | This package |
-| Model selection itself (`provider` / `model` parameters of `subagent`) | Official subagent (this package only consumes it) |
+| Discovery, messaging, waiting, and stopping | The host provides `list_agents`, `send_message`, `wait_agent`, and optional `interrupt_agent` |
+| Routing policy, `delegate_task`, settings page, wizard, and usage monitoring | This package |
+| Model authorization and task board | The host manages both. Agent Teams controls task board availability |
+
+`list_agents` shows the subagent tree. `send_message` confirms delivery. `wait_agent` waits for inbox input or a completion notice, and a timeout lets you return to other work. The Standard preset disables `interrupt_agent` by default. Enable it using the host's configuration guide, or stop tasks in the Subagent panel. Check the task's terminal record to confirm it stopped.
 
 ## Compatibility
 
-| DSH version | Status |
+| DSH version | Verification |
 |---|---|
-| `0.2.2-rc.1` | ✅ Target version: fixture + isolated-profile **real-host load verified**; GUI end-to-end is for the user to accept (**not verified**) |
-| `0.2.1-rc.5` and older | ❌ Incompatible: no batch `ctx.tools.execute`, and no 0.2.2 child-route semantics |
-| Other `0.2.x` versions | Not tested per version; `engines.dsh` declares `>=0.2.2-rc.1 <0.3.0`, so out-of-range versions are rejected by the installer |
+| `0.2.2-rc.5` | An isolated Web instance started with the installed CLI verified settings, delegation, and control tools. Desktop trial and the npm-distributed CLI remain to be verified |
+| `0.2.2-rc.1`–`rc.4` | Install `dsh-submodel@0.3.0` for these host versions, or upgrade DSH |
+| Other versions within `>=0.2.2-rc.5 <0.3.0` | Within the declared range, pending per-version verification |
 
 ## Troubleshooting
 
-Fail-fast: startup warnings are logged only and never thrown; errors only surface when you call a tool.
-
-| Symptom | Level | Meaning and fix |
-|---|---|---|
-| `config.executor.provider/model 未配置，自动委派不可用…` | `error` | No default delegation target: call `configure_submodel` or add `executor` manually as in "Configuration (two steps)" |
-| `child LLM route "…/…" is not allowed for this Session` | error on delegation | **Host authorization missing** (or this route is not in the allow-list): open "subagent model selection", add the route (takes effect on new sessions), or re-run `configure_submodel` and accept the host-authorization write |
-| `configure_submodel` is not visible | — | ① `executor` is already configured (the wizard intentionally appears only once); ② `autoConfigure` is `false`; ③ the native `subagent` in this session exposes no model-selection parameters (check that model selection is enabled in the profile/preset); ④ you are not the top-level agent |
-| `configure_submodel` returns no question card | — | The client has no GUI (headless / plain CLI), so there is nobody to ask; the tool returns manual YAML and writes nothing — use Option B above |
-| `当前 profile 无 agentPresets 服务，策略不生效` | `warn` | This profile has no agentPresets service; use a profile that supports compositions |
-| `原生 subagent 未暴露 provider/model，delegate_task 不安装` | `warn` | The native `subagent` in this session exposes no model-selection parameters: the whole install (policy section / guard / tools) is skipped and retried automatically once the capability appears |
-| `本会话未启用官方 subagent 模型选择，策略段不渲染` | `info` | Enable `subagent-model-selection-settings` in Settings (host authorization applies to new sessions only); tools are still installed subject to their own gate |
+| Symptom | What to do |
+|---|---|
+| No default execution model | Pick one in plugin details or use the first-run wizard |
+| The current conversation cannot use the chosen model | Allow it in Subagent settings and start a new conversation |
+| The model list fails to load | Select **Reload model list**. You can keep or remove any saved choice that is currently unavailable |
+| The wizard is missing | It appears for a top-level agent in the target preset when no execution model is configured and native model selection is available |
+| No settings page or question card is available | Use the profile patch under Configuration (two steps) |
 
 ## Known limitations
 
-- The policy text is Chinese by default; override it with `texts.*` (tool descriptions and some guard
-  rejections stay in English).
-- Applies only to the composition named by `preset` (default `standard`).
-- No budget guard / nudging / failure re-routing (watchdog).
-- `configure_submodel` writes exactly two places — this package's config row and the host authorization row
-  (`subagent-model-selection-settings`); it does not create channels or credentials and does not touch other
-  plugins.
-- Model metadata has no price field, so which routes count as "cheap" is up to your configuration (the wizard
-  only pre-fills candidates; it does not decide for you).
-- Non-GUI clients have no question card, so use Option B (manual YAML).
-- The team formation self-check is a **prompt-level constraint**: whether to parallelise and how many teammates to start is still the main model's decision, not enforced; it does not enable Agent Teams for you.
+- `preset` selects where the policy applies. Live agents keep their preferences from activation. New activations read the saved preferences. The host records model authorization when a conversation is created.
+- `texts.*` preserves custom guidance. Check it for calls to retired control tools when upgrading.
+- Team formation guidance is a prompt. The main model decides whether and how to act on it.
 
 ## Rollback
 
@@ -256,8 +237,7 @@ Fail-fast: startup warnings are logged only and never thrown; errors only surfac
 dsh plugin --profile <your-profile> remove dsh-submodel
 ```
 
-Removing the plugin leaves the host authorization row in the profile patch; to revert that too, delete the
-`subagent-model-selection-settings` entry manually.
+Disabling or removing the plugin does not revoke host authorization. Restore the previous list in Subagent settings if needed. When switching back to a previous plugin, disable the new one first, restore the backed-up entry and profile settings, then restart and open a new conversation to confirm only one delegation policy is active.
 
 To turn off only the team formation self-check while keeping everything else, set `teamFit.enabled` to `false`
 and restart the profile (no plugin removal needed).
@@ -277,15 +257,11 @@ Current verification counts (CI runs the same commands on every push / PR, see `
 
 | Check | Result |
 |---|---|
-| fixture | **126** assertions, `failed: 0` |
+| fixture | **141** assertions, `failed: 0` |
 | Python driver | **7** test cases, `OK` |
 | Public-profile smoke | **8** assertions, `failed: 0` |
 
-GUI end-to-end (the `configure_submodel` card and both writes, `delegate_task` delegation, and switching the
-main model to the execution route to enter economize mode) must be accepted by the user in a restarted real
-GUI session and is **not verified yet**. For the team formation self-check, the deterministic parts (the three
-leading lines, identity/preset/team-state gating, off-by-default rollback) are covered by the fixture; the
-actual first-turn reply and teammate count in a real GUI conversation still need acceptance in a new session.
+Isolated Web verification used local synthetic models. It covered save and reopen, conflicting drafts, model-list recovery, reconnects, light and dark themes, keyboard interaction, native control tools, and usage monitoring. It did not exercise a personal Desktop profile or paid models. The team-formation prompt cannot guarantee verbatim compliance by a model.
 
 ## Contributing
 
@@ -296,14 +272,29 @@ actual first-turn reply and teammate count in a real GUI conversation still need
 
 ## Releasing (maintainers)
 
+### One development and release source
+
+Maintain features, fixes, and packaged documentation in this repository. Try candidate packages in
+an isolated DSH profile. For every validated plugin update, maintainers must publish the corresponding
+open-source version with a changelog entry, a Git tag, and an npm release. Use that same validated
+release for day-to-day local use.
+
+Keep provider and model choices, budget settings, and credentials in the user's own DSH profile or
+credential store. Use placeholders in public examples. Before pushing, review the commits, the
+`npm pack --dry-run` file list, and the contents that will ship. Keep real provider and model mappings,
+local paths, profile backups, credentials, and run records out of Git and the published package.
+Local material in `reference/` and private plans under `docs/plans/` stay on the maintainer's machine.
+Changes to a personal profile do not require a package release.
+
+### Release steps
+
 Releases go through GitHub Actions + npm **Trusted Publishing (OIDC)**; no npm token is stored on this
 machine or in the repository:
 
-1. Add a `## <version> (YYYY-MM-DD)` section at the top of `CHANGELOG.md`;
-2. On `main`, run `pwsh scripts/release.ps1 <version>`: it runs the gates, bumps the `package.json`
-   version, commits, tags and pushes, then polls npm until the new version appears;
-3. The repository's `release` workflow (`.github/workflows/release.yml`) re-runs the tests after the tag
-   push and publishes with `npm publish`; the script tries to create the GitHub Release once npm confirms.
+1. Review the version in `package.json` and its [changelog](CHANGELOG.md) entry. Run `pwsh scripts/release.ps1 <version> -FromIndex` to prepare a **local-only** candidate from staged files. The script does not bump the version, commit, or tag.
+2. Review the archive's contents, its `tarball-sha256` (the whole archive), and its `pack-content-sha256` (the files inside). Try that candidate in an isolated profile and in a Desktop trial with rollback prepared.
+3. For an approved release, use a clean `main` with the reviewed commit. Run `pwsh scripts/release.ps1 <version> -ExpectedContentSha256 <content digest> -Publish` to check the content and push only that commit and an annotated tag carrying the digest.
+4. The [release workflow](.github/workflows/release.yml) repacks the pinned commit, verifies the same content digest, and publishes the checked archive. It then downloads the exact version to verify it and updates the GitHub Release.
 
 One-time setup: configure a Trusted Publisher in the npm package settings (repository
 `angel291592/dsh-submodel`, workflow `release.yml`, allow Direct publish). After that, releasing needs no
