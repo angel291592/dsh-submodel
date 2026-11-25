@@ -8,7 +8,7 @@
 > - **双向都成立**：不管主脑是强模型还是便宜模型，都能按任务把活派给合适的另一档；被派出的子代理不能再次转包。
 > - 每条路由用哪个 provider/model 由你配置；策略正文不含任何渠道或模型名。
 
-![dsh-submodel：主脑按意图把任务路由到执行路由或专家路由](https://raw.githubusercontent.com/angel291592/dsh-submodel/main/assets/hero.svg)
+![dsh-submodel：主脑按意图把任务路由到执行路由或专家路由](assets/hero.svg)
 
 [![npm version](https://img.shields.io/npm/v/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![npm downloads](https://img.shields.io/npm/dm/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)

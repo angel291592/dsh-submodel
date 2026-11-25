@@ -8,7 +8,7 @@
 > - **Both directions**: whichever model is the main one, work goes to the right tier; delegated subagents cannot delegate further.
 > - You configure the provider/model behind each route; the policy text ships with no provider or model names.
 
-![dsh-submodel: the main model routes work to an executor route or expert routes](https://raw.githubusercontent.com/angel291592/dsh-submodel/main/assets/hero.svg)
+![dsh-submodel: the main model routes work to an executor route or expert routes](assets/hero.svg)
 
 [![npm version](https://img.shields.io/npm/v/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![npm downloads](https://img.shields.io/npm/dm/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
