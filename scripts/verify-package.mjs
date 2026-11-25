@@ -31,7 +31,7 @@ import zlib from 'node:zlib';
 
 const EXPECTED = {
   name: 'dsh-submodel',
-  version: '0.4.1',
+  version: '0.4.2',
   main: 'lib/index.js',
   type: 'module',
   bundlePatch: './cordis.patch.yml',

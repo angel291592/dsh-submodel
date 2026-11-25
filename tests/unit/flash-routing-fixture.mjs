@@ -13,6 +13,7 @@
  * 由 `test_flash_routing.py`（stdlib unittest）驱动，两者都进入常驻测试。
  */
 import { deepStrictEqual } from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { resolve as resolvePath } from 'node:path';
 
@@ -2784,6 +2785,66 @@ await check('入口：团队服务抛错时仍按本步工具集合判断，回�
 });
 await check('入口：重复组装幂等且无写入副作用', () => {
   assertEqual([fitSectionText(fitAssembly), fitSectionText(fitAssembly)], [FIT_TEXT, FIT_TEXT]);
+});
+
+// ── 13. 设置页模型标签：每个模型都标出所属渠道（client.js 的目录投影）────────────
+// client.js 是浏览器端单文件模块（window.__ModuleLoader__），没有可 import 的导出；
+// 这里在假 window 里执行真源码，只注入一个测试用键取出内部的目录投影函数。
+function loadClientDirectory() {
+  const clientSource = readFileSync(resolvePath(libDir, '..', 'client.js'), 'utf8');
+  const anchor = "inject: ['slots', 'locale'],";
+  const anchorAt = clientSource.indexOf(anchor);
+  assert(anchorAt >= 0, 'client.js 的模块返回结构已变化：找不到 inject 标记');
+  const returnAt = clientSource.lastIndexOf('return {', anchorAt);
+  assert(returnAt >= 0, 'client.js 的模块返回结构已变化：找不到 return 标记');
+  const eol = clientSource.includes('\r\n') ? '\r\n' : '\n';
+  const instrumented = clientSource.slice(0, returnAt)
+    + `return {${eol}      __directoryOfForTest: directoryOf,${eol}      `
+    + clientSource.slice(returnAt + 'return {'.length);
+  const react = {
+    createElement: () => null,
+    useEffect: () => undefined,
+    useId: () => 'fixture-id',
+    useRef: () => ({ current: false }),
+    useState: (initial) => [initial, () => undefined],
+    useSyncExternalStore: () => undefined,
+  };
+  let testedModule;
+  const fakeWindow = {
+    __ModuleLoader__: {
+      load: ({ factory }) => {
+        testedModule = factory((name) => (name === 'react' ? react : undefined));
+      },
+    },
+  };
+  new Function('window', instrumented)(fakeWindow);
+  assert(typeof testedModule?.__directoryOfForTest === 'function', 'client.js 未暴露目录投影函数');
+  return testedModule.__directoryOfForTest;
+}
+const clientDirectoryOf = loadClientDirectory();
+await check('设置页模型标签：模型名不重复时也显示所属渠道', () => {
+  const rows = clientDirectoryOf({
+    groups: [
+      { id: 'chan-a', name: 'Channel A', models: [{ id: 'model-one', name: 'Model One' }] },
+      { id: 'chan-b', name: 'Channel B', models: [{ id: 'model-two', name: 'Model Two' }] },
+    ],
+  });
+  assertEqual(rows.map((row) => row.label), ['Model One · Channel A', 'Model Two · Channel B'],
+    '每个模型都必须带所属渠道名，不能只在重名时才显示');
+});
+await check('设置页模型标签：同名模型按渠道区分且互不覆盖', () => {
+  const rows = clientDirectoryOf({
+    groups: [
+      { id: 'chan-a', name: 'Channel A', models: [{ id: 'model-one', name: 'Model One' }] },
+      { id: 'chan-b', name: 'Channel B', models: [{ id: 'model-one', name: 'Model One' }] },
+    ],
+  });
+  assertEqual(rows.map((row) => row.label), ['Model One · Channel A', 'Model One · Channel B']);
+  assertEqual(rows.map((row) => `${row.provider}/${row.model}`), ['chan-a/model-one', 'chan-b/model-one']);
+});
+await check('设置页模型标签：渠道显示名缺失时回退到渠道 id', () => {
+  const rows = clientDirectoryOf({ groups: [{ id: 'chan-a', models: [{ id: 'model-one', name: 'Model One' }] }] });
+  assertEqual(rows.map((row) => row.label), ['Model One · chan-a']);
 });
 
 // ── 输出 ─────────────────────────────────────────────────────────────────────

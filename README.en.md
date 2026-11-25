@@ -17,7 +17,7 @@
 
 [中文](README.md) | **English**
 
-Open **Plugins → Subagent model settings** to order the cost-effective and expert model groups and add a note about what each model is good for. The main model can choose where to start. With automatic switching enabled, eligible failures move forward from that choice. DSH manages providers, credentials, and model permissions. Version `0.4.1` requires DSH `>=0.2.2-rc.5` with no upper bound, so later DSH releases install and run by default.
+Open **Plugins → Subagent model settings** to order the cost-effective and expert model groups and add a note about what each model is good for; the list shows each model's channel. The main model can choose where to start. With automatic switching enabled, eligible failures move forward from that choice. DSH manages providers, credentials, and model permissions. Version `0.4.2` requires DSH `>=0.2.2-rc.5` with no upper bound, so later DSH releases install and run by default.
 
 ## Install
 
@@ -258,7 +258,7 @@ Current verification counts (CI runs the same commands on every push / PR, see `
 
 | Check | Result |
 |---|---|
-| fixture | **141** assertions, `failed: 0` |
+| fixture | **144** assertions, `failed: 0` |
 | Python driver | **7** test cases, `OK` |
 | Public-profile smoke | **8** assertions, `failed: 0` |
 

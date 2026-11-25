@@ -137,10 +137,10 @@ window.__ModuleLoader__.load({
           // The catalog group carries the provider's display name; fall back to its id.
           channel: typeof group.name === 'string' && group.name.trim() ? group.name.trim() : group.id,
           efforts: model.reasoning?.efforts ?? [] })));
-      const counts = new Map();
-      for (const model of models) counts.set(model.name, (counts.get(model.name) ?? 0) + 1);
-      return unique(models).map(model => ({ ...model, label: counts.get(model.name) > 1
-        ? `${model.name} · ${model.channel}` : model.name }));
+      // Always name the owning channel: one model can be served by several routes,
+      // and the host's own model lists print the provider beside every model.
+      return unique(models).map(model => ({ ...model,
+        label: model.channel ? `${model.name} · ${model.channel}` : model.name }));
     }
 
     function PickModel({ label, placeholder, rows, onPick }) {
