@@ -33,6 +33,16 @@
   暂时没有可测宿主，按「默认放行、遇宿主接口变化再按实测收紧」处理。
 - 发行门禁 `scripts/verify-package.mjs` 同步改为只要求 `>=0.2.2-rc.5`（不再要求上界）。
 
+### 发布（2026-11-25）
+
+- npm：[dsh-submodel@0.4.1](https://www.npmjs.com/package/dsh-submodel/v/0.4.1)（MIT；registry 清单
+  `engines.dsh: >=0.2.2-rc.5`）
+- GitHub Release：[v0.4.1](https://github.com/angel291592/dsh-submodel/releases/tag/v0.4.1)
+- 流程：`scripts/release.ps1 0.4.1` 本地准备（三项门禁 → 按已核对 Git 树打包 → 内容摘要复核）→
+  `-ExpectedContentSha256 a5899e… -Publish` 推送已审阅提交与注解 tag → GitHub Actions `release`
+  工作流重新打包比对同一摘要后，经 npm Trusted Publishing（OIDC）发布并同步 Release。
+- 发布后实测：从 registry 在隔离的 DSH `0.2.3-alpha.2` profile 装上 `0.4.1`，清单与 tag 内容一致。
+
 ## 0.4.0（2026-11-24）
 
 - 增加双语设置页。性价比模型和专家模型分别排序，支持逐模型填写用途备注和默认推理强度；主模型可按用途选一个起点。宿主选模授权单独管理。
