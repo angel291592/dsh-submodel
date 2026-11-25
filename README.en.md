@@ -14,10 +14,40 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![license](https://img.shields.io/npm/l/dsh-submodel.svg)](https://github.com/angel291592/dsh-submodel/blob/main/LICENSE)
 [![DSH >=0.2.2-rc.5](https://img.shields.io/badge/DSH-0.2.2--rc.5%20or%20later-4d6bfe.svg)](https://github.com/angel291592/dsh-submodel)
+[![ci](https://github.com/angel291592/dsh-submodel/actions/workflows/ci.yml/badge.svg)](https://github.com/angel291592/dsh-submodel/actions/workflows/ci.yml)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 [中文](README.md) | **English**
 
-Open **Plugins → Subagent model settings** to order the cost-effective and expert model groups and add a note about what each model is good for; the list shows each model's channel. The main model can choose where to start. With automatic switching enabled, eligible failures move forward from that choice. DSH manages providers, credentials, and model permissions. Version `0.4.2` requires DSH `>=0.2.2-rc.5` with no upper bound, so later DSH releases install and run by default.
+Open **Plugins → Subagent model settings** to order the cost-effective and expert model groups and add a note about what each model is good for; the list shows each model's channel. The main model can choose where to start. With automatic switching enabled, eligible failures move forward from that choice. DSH manages providers, credentials, and model permissions.
+
+## Who it is for
+
+- You already use **DSH** and have access to two or more model tiers (for example a cheap executor plus one strong expert model).
+- Your main agent spends most of its time on **routine work** — running tests, small fixes, retrieval, tidying — billed at the expensive tier.
+- You still want architecture calls and hard logic review decided by the strong model, rather than switching everything to the cheap one.
+
+A single model tier works too: without an expert group, it only routes verifiable execution to the executor route.
+
+<details>
+<summary>Contents</summary>
+
+- [Who it is for](#who-it-is-for)
+- [Install](#install)
+- [Configuration (two steps)](#configuration-two-steps)
+- [Usage reminders and automatic switching](#usage-reminders-and-automatic-switching)
+- [How it decides who does what (route-based since 0.2.0)](#how-it-decides-who-does-what-route-based-since-020)
+- [Team formation self-check (optional, 0.3.0+)](#team-formation-self-check-optional-030)
+- [Relationship to the official plugins](#relationship-to-the-official-plugins)
+- [Compatibility](#compatibility)
+- [Troubleshooting](#troubleshooting)
+- [Known limitations](#known-limitations)
+- [Rollback](#rollback)
+- [Development and verification](#development-and-verification)
+- [Contributing](#contributing)
+- [Releasing (maintainers)](#releasing-maintainers)
+
+</details>
 
 ## Install
 
@@ -26,6 +56,9 @@ dsh plugin --profile <your-profile> add dsh-submodel   # 1. install
 dsh --profile <your-profile>                           # 2. start (restart the profile after adding)
 # 3. on the first session, follow "Configuration (two steps)" below; or call configure_submodel
 ```
+
+> If it saves you tokens on routine work, a star on the repository is the most direct way to help others find it.
+> You can also share your routing setup in [Discussions](https://github.com/angel291592/dsh-submodel/discussions).
 
 ## Configuration (two steps)
 

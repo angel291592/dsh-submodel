@@ -14,10 +14,40 @@
 [![npm downloads](https://img.shields.io/npm/dm/dsh-submodel.svg)](https://www.npmjs.com/package/dsh-submodel)
 [![license](https://img.shields.io/npm/l/dsh-submodel.svg)](https://github.com/angel291592/dsh-submodel/blob/main/LICENSE)
 [![DSH >=0.2.2-rc.5](https://img.shields.io/badge/DSH-0.2.2--rc.5%20%E8%B5%B7-4d6bfe.svg)](https://github.com/angel291592/dsh-submodel)
+[![ci](https://github.com/angel291592/dsh-submodel/actions/workflows/ci.yml/badge.svg)](https://github.com/angel291592/dsh-submodel/actions/workflows/ci.yml)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com)
 
 **中文** | [English](README.en.md)
 
-在 **插件 → 派活模型设置** 中给性价比模型和专家模型分别排序，也可以给每个模型写一句用途备注；列表会标出每个模型所属渠道。主模型可以按任务选择起点；启用自动换模型后，符合条件的失败会从所选位置往下尝试。DSH 管理模型渠道、凭据和子代理选模权限。`0.4.2` 要求 DSH `>=0.2.2-rc.5`（不设上限：之后发布的 DSH 新版本默认可装、可用）。
+在 **插件 → 派活模型设置** 中给性价比模型和专家模型分别排序，也可以给每个模型写一句用途备注；列表会标出每个模型所属渠道。主模型可以按任务选择起点；启用自动换模型后，符合条件的失败会从所选位置往下尝试。DSH 管理模型渠道、凭据和子代理选模权限。
+
+## 它适合谁
+
+- 你已经在用 **DSH**，并且手上有两档以上的模型渠道（例如一个便宜的执行模型 + 一个强专家模型）。
+- 主代理经常在做**大量常规活**——跑测试、改小 bug、检索、整理——却都烧在贵模型上。
+- 你希望架构判断、复杂逻辑复核这类**深水区**仍然由强模型把关，而不是一刀切全换成便宜模型。
+
+只装了一档模型也能用：不配置专家组时，它只会把可验证的执行块派给执行路由。
+
+<details>
+<summary>目录</summary>
+
+- [它适合谁](#它适合谁)
+- [安装](#安装)
+- [配置（两步）](#配置两步)
+- [用量提醒与自动换模型](#用量提醒与自动换模型)
+- [它怎么判断该谁干（0.2.0 起按路由）](#它怎么判断该谁干020-起按路由)
+- [团队队形自检（可选，0.3.0+）](#团队队形自检可选030)
+- [与官方插件的边界](#与官方插件的边界)
+- [兼容性](#兼容性)
+- [故障排查](#故障排查)
+- [已知限制](#已知限制)
+- [回滚](#回滚)
+- [开发与验证](#开发与验证)
+- [参与贡献](#参与贡献)
+- [发版（维护者）](#发版维护者)
+
+</details>
 
 ## 安装
 
@@ -26,6 +56,9 @@ dsh plugin --profile <你的 profile> add dsh-submodel   # 1. 安装
 dsh --profile <你的 profile>                            # 2. 启动（装完插件需重启 profile）
 # 3. 首次会话按下面「两步配置」完成授权与路由；或直接调用 configure_submodel
 ```
+
+> 如果它帮你在常规任务上省下了 token，欢迎给仓库点一个 star——这是让更多人看到它最直接的方式。
+> 也欢迎在 [Discussions](https://github.com/angel291592/dsh-submodel/discussions) 里贴出你的派活配置。
 
 ## 配置（两步）
 
