@@ -23,6 +23,17 @@
 - **未验证**：真实 Desktop GUI 里的实际渲染（本环境无浏览器控制）。渠道文本由「目录投影函数」的断言覆盖，
   渲染层只使用该函数的 `label` 字段。
 
+### 发布（2026-11-25）
+
+- npm：[dsh-submodel@0.4.2](https://www.npmjs.com/package/dsh-submodel/v/0.4.2)（MIT；registry 清单
+  `engines.dsh: >=0.2.2-rc.5`）
+- GitHub Release：[v0.4.2](https://github.com/angel291592/dsh-submodel/releases/tag/v0.4.2)
+- 流程：`scripts/release.ps1 0.4.2` 本地准备 → `-ExpectedContentSha256 fc2783c2… -Publish` 推送已审阅提交与
+  注解 tag → release 工作流在同一内容上经 npm Trusted Publishing（OIDC）发布并同步 Release；工作流全程成功。
+- 发布后实测：从 registry 下载 0.4.2 tarball，`scripts/verify-package.mjs` 复核
+  `pack-content-sha256:fc2783c240ed115dfd69c23b0523b2dc853d0d898e91011b78fa7f9d642e1b1c`，与本地审阅候选一致
+  （16 个文件）；在隔离 DSH `0.2.2-rc.5` profile 安装候选包并启动 Web，插件装载无报错。
+
 ## 0.4.1（2026-11-25）
 
 **放开 DSH 版本上限。** `engines.dsh` 由 `>=0.2.2-rc.5 <0.3.0` 改为 `>=0.2.2-rc.5`：最低支持版本不变，
