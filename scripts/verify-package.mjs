@@ -21,7 +21,7 @@
 //   tarball-sha256      = SHA256(整个 .tgz 文件字节)
 //
 // 输出约束：隐私项只打印类别与公开路径，绝不打印命中的敏感值；出错时退出码为 1。
-// 候选契约：统一版 0.4.0（计划 §7.1）。后续版本需同步改本文件的 EXPECTED 与允许项。
+// 候选契约：统一版 0.4.x（计划 §7.1；0.4.1 起放开 DSH 上界，见 CHANGELOG）。
 
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -31,12 +31,12 @@ import zlib from 'node:zlib';
 
 const EXPECTED = {
   name: 'dsh-submodel',
-  version: '0.4.0',
+  version: '0.4.1',
   main: 'lib/index.js',
   type: 'module',
   bundlePatch: './cordis.patch.yml',
-  // 计划 §7.1：最低 DSH 0.2.2-rc.5，上界 <0.3.0。
-  dshEngine: ['>=0.2.2-rc.5', '<0.3.0'],
+  // 计划 §7.1：最低 DSH 0.2.2-rc.5；0.4.1 起不设上界（更高的 DSH 版本默认放行）。
+  dshEngine: ['>=0.2.2-rc.5'],
   // 计划 §5 package.json 行：加 ./client、./locale/*.json 导出。
   clientExportKey: './client',
   clientExportTarget: './client.js',

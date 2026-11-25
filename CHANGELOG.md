@@ -2,6 +2,37 @@
 
 本包是作者自建路由插件策略层的公版化产物；公开名定为 `dsh-submodel`。
 
+## 0.4.1（2026-11-25）
+
+**放开 DSH 版本上限。** `engines.dsh` 由 `>=0.2.2-rc.5 <0.3.0` 改为 `>=0.2.2-rc.5`：最低支持版本不变，
+不再限制更高的 DSH 版本。此前 `>=0.3.0` 的宿主会被兼容性检查直接拒绝、插件装不上；现在新版本默认放行
+并按兼容安装。最低版本仍保留，因为更早的宿主没有批量 `ctx.tools.execute` 与 0.2.2 的子代理路由语义。
+
+### 适配核对（对照 DSH 0.2.3-alpha.2，2026-11-23 桌面 nightly，当时最新）
+
+- **宿主接口逐项核对，全部存在**：`systemPrompt.section/getSectionOrder`；
+  `system-prompt/assemble`（assembly 仍是 `sections/contexts/variables`，上下文仍带
+  `agent/scope/session/toolSet`）；`tools.execute` 批量契约（`calls/signal/agent/toolSet` →
+  `results/additionalContexts/concluded`）、`tools.register/get/executable/guard`（guard 返回字符串即拒绝）；
+  `settings.configure/describe/mutate`（含 `SETTINGS_CONFLICT`）；`sessionProjections.snapshot/onChanged/stateOf`
+  （`stateOf` 已标注弃用但仍可用，本包只读一个可选投影，读不到时自动降级）；`agents.get/list`、
+  `subagents.namesOf`、`llm.listProviders/listModels/resolveModelInfo`、`userQuestions.ask`、
+  `agentTeams.isEnabled`、`agentPresets.composedPreset`；事件 `agent/created`、`agent/disposed`、
+  `agent/pre-step`、`tools/change`、`internal/plugin`、`llm/retry(-started)`。
+- **设置页（浏览器端）接口仍存在**：`configForms`（表单快照仍是 `{status,value,revision,writable}`，
+  `mutate(ops, revision)` 签名不变）、`connection.generation`、`remote` / `remote.session.modelCatalog`、
+  `llm/adapters-updated`、`plugins.bundle.config` 插槽、`locale.register`；`window.__ModuleLoader__`
+  的 `{inject, apply}` 模块契约与官方模板一致。
+- **官方升级指南（v0.2.2-rc.5、v0.2.3-alpha.1）中的破坏性变更不涉及本包**：Node.js 版本要求、
+  系统消息消费方累计章节、`list_agents` 结果改为 `{running, limit, agents}`、移除
+  `ctx.sessionQuery.inspectSession`，以及 CUA / office / PTC / SDK 等变更；本包不使用这些消费面。
+  `systemPrompt.section()` 的语义细化只影响重复段名与作用域覆盖，本包仍使用唯一段名。
+- **真实宿主验证**：在隔离 `DSH_HOME` 用 npm 版 `@deepseek-ai/dsh@0.2.3-alpha.2` 的 CLI 安装并启动
+  Web 成功（打印 `dsh web:` 地址、无装载报错）；同一宿主上当前发布版 `0.4.0` 也能正常安装。
+- **未验证**：0.2.3-alpha.2 桌面 GUI 里的设置页交互与真实派活（需要 GUI 与模型凭据）；`0.3.0` 及以后
+  暂时没有可测宿主，按「默认放行、遇宿主接口变化再按实测收紧」处理。
+- 发行门禁 `scripts/verify-package.mjs` 同步改为只要求 `>=0.2.2-rc.5`（不再要求上界）。
+
 ## 0.4.0（2026-11-24）
 
 - 增加双语设置页。性价比模型和专家模型分别排序，支持逐模型填写用途备注和默认推理强度；主模型可按用途选一个起点。宿主选模授权单独管理。

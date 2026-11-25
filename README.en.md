@@ -17,7 +17,7 @@
 
 [中文](README.md) | **English**
 
-Open **Plugins → Subagent model settings** to order the cost-effective and expert model groups and add a note about what each model is good for. The main model can choose where to start. With automatic switching enabled, eligible failures move forward from that choice. DSH manages providers, credentials, and model permissions. Version `0.4.0` requires DSH `>=0.2.2-rc.5 <0.3.0`.
+Open **Plugins → Subagent model settings** to order the cost-effective and expert model groups and add a note about what each model is good for. The main model can choose where to start. With automatic switching enabled, eligible failures move forward from that choice. DSH manages providers, credentials, and model permissions. Version `0.4.1` requires DSH `>=0.2.2-rc.5` with no upper bound, so later DSH releases install and run by default.
 
 ## Install
 
@@ -212,8 +212,9 @@ does not affect other prompt sections.
 | DSH version | Verification |
 |---|---|
 | `0.2.2-rc.5` | An isolated Web instance started with the installed CLI verified settings, delegation, and control tools. Desktop trial and the npm-distributed CLI remain to be verified |
-| `0.2.2-rc.1`–`rc.4` | Install `dsh-submodel@0.3.0` for these host versions, or upgrade DSH |
-| Other versions within `>=0.2.2-rc.5 <0.3.0` | Within the declared range, pending per-version verification |
+| `0.2.3-alpha.2` (latest desktop nightly at the time) | Every host and browser-side interface this package uses was checked against it; the isolated CLI installed the candidate and started the Web surface. The settings page and real delegation have not been exercised in a GUI |
+| Other versions above `0.2.2-rc.5` (including 0.3.x and later) | Declared compatible with **no upper bound**; newer releases are allowed and install by default. Not verified release by release; tighten only if a host interface actually breaks |
+| `0.2.2-rc.1`–`rc.4` | Below the minimum: install `dsh-submodel@0.3.0` for these hosts, or upgrade DSH |
 
 ## Troubleshooting
 
