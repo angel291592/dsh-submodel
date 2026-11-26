@@ -98,6 +98,8 @@ sessions**, so open a new session (or restart the profile) after writing it.
 
 **Settings page:** open **Plugins → Subagent model settings**. Add models to either group, change the order, and enter short notes such as “Prefer for code”. The first model in each group is the usual starting point; the main model can use the notes to pick another one. Allow each model separately in Subagent settings. If another page saves first, your draft is kept. Load the saved settings and review the draft before saving it. Reload the page if the connection changes.
 
+![Plugins → Subagent model settings: order the cost-effective and expert models, add purpose notes, and set a default reasoning effort; model names in the screenshot are blurred](assets/screenshot-settings.png)
+
 **First-run wizard:** call `configure_submodel` from a top-level agent with `autoConfigure` on and no execution model configured. It asks for execution and expert models first, then asks separately whether to add host authorization. The two writes are separate; the wizard reports which succeeded. Saving an execution model hides the wizard.
 
 **Without the settings page:** add or update the `submodel` entry in your profile patch. Keep any other fields in that entry. If the host cannot show question cards, the wizard explains how to configure preferences and authorization manually.
@@ -183,6 +185,8 @@ Two typical calls:
 // 2) Escalate → expert route: provider/model together, and the route must be in the host allow-list
 { "description": "review the state machine", "prompt": "<complete task>", "provider": "your-provider", "model": "your-model" }
 ```
+
+![The main model runs the team formation self-check first, then executes and reports back; usage is shown under the reply](assets/screenshot-demo.png)
 
 ## Team formation self-check (optional, 0.3.0+)
 
