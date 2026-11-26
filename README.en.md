@@ -186,7 +186,7 @@ Two typical calls:
 { "description": "review the state machine", "prompt": "<complete task>", "provider": "your-provider", "model": "your-model" }
 ```
 
-![The main model runs the team formation self-check first, then executes and reports back; usage is shown under the reply](assets/screenshot-demo.png)
+![Asked to "delegate this to a subagent", the main model runs the team formation self-check, delegates the work, and folds the subagent's findings into a table; model names and the sidebar are masked](assets/screenshot-demo.png)
 
 ## Team formation self-check (optional, 0.3.0+)
 

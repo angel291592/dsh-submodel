@@ -181,7 +181,7 @@ DSH 原生 `subagent` 默认只允许子代理沿用父会话的路由；要让�
 { "description": "复核状态机", "prompt": "<完整任务说明>", "provider": "your-provider", "model": "your-model" }
 ```
 
-![主脑接到任务后先做团队队形自检，再执行并汇报结果；消息下方显示本次用量](assets/screenshot-demo.png)
+![收到「派一个子代理整理测试文件」的任务后，主脑先做团队队形自检，再派子代理执行并把结果汇总成表；截图中的模型名与侧栏已做处理](assets/screenshot-demo.png)
 
 ## 团队队形自检（可选，0.3.0+）
 
